@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sitescanner · report</title>
+<meta name="generator" content="sitescanner __VERSION__">
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo" aria-hidden="true">◎</span> sitescanner</div>
+  <div class="pickers">
+    <label class="field"><span>Sito</span><select id="site"></select></label>
+    <label class="field"><span>Base</span><select id="base"></select></label>
+    <button id="swap" class="btn icon" title="Inverti Base e Head" aria-label="Inverti Base e Head">⇄</button>
+    <label class="field"><span>Head</span><select id="head"></select></label>
+    <label class="btn file" title="Carica una redirect map CSV (from,to)">
+      <input type="file" id="rmap" accept=".csv,.txt,text/csv" hidden>
+      <span id="rmapLabel">Redirect map…</span>
+    </label>
+  </div>
+</header>
+<main id="app"><p class="empty">Caricamento…</p></main>
+<aside id="detail" class="drawer" hidden></aside>
+<div id="scrim" class="scrim" hidden></div>
+<footer class="foot">Generato da sitescanner __VERSION__ · <span id="gen"></span></footer>
+<script src="data/index.js"></script>
+<script>
+/*__CORE__*/
+</script>
+<script>
+/*__APP__*/
+</script>
+</body>
+</html>

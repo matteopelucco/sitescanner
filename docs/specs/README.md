@@ -1,0 +1,20 @@
+# Specifiche funzionali — sitescanner
+
+Versione di riferimento: **0.1.0**
+
+| # | Documento | Contenuto |
+|---|---|---|
+| 1 | [Panoramica](01-panoramica.md) | Obiettivo, glossario, perimetro, requisiti non funzionali |
+| 2 | [Configurazione dei siti](02-configurazione.md) | File `sites/<id>.yml`, ambienti, opzioni |
+| 3 | [Comandi CLI](03-cli.md) | Sintassi, comportamento, output ed exit code di ogni comando |
+| 4 | [Scansione](04-scansione.md) | Crawling, dati raccolti per pagina, screenshot, issue di qualità |
+| 5 | [Storico e dati](05-storico-e-dati.md) | Istantanee immutabili, label, riferimenti alle scan |
+| 6 | [Confronto Base/Head](06-confronto.md) | Abbinamento pagine, redirect map, tipi di differenza e severità |
+| 7 | [Report HTML](07-report.md) | Report statico, export condivisibile, server locale |
+
+## Convenzioni
+
+- Ogni requisito ha un identificativo stabile (`RF-<AREA>-NN` funzionale, `RNF-NN` non funzionale), da citare in issue, PR e test.
+- **DEVE** indica un comportamento obbligatorio; **PUÒ** un comportamento opzionale o configurabile.
+- Le motivazioni delle scelte architetturali sono nelle [ADR](../adr/README.md); qui si descrive *cosa* fa il sistema, non *perché* è costruito così.
+- Il comportamento verificato automaticamente è indicato con il riferimento al test (`test/e2e.test.js`, `test/compare.test.js`).

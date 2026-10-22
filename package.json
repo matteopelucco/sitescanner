@@ -1,0 +1,25 @@
+{
+  "name": "sitescanner",
+  "version": "0.1.0",
+  "description": "Scansioni as-is di siti web, storico e report HTML di regressione Base/Head",
+  "type": "module",
+  "bin": {
+    "sitescanner": "bin/sitescanner.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "node-html-parser": "^9.0.5",
+    "pixelmatch": "^8.0.0",
+    "pngjs": "^7.0.0",
+    "yaml": "^2.9.1"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.64.1"
+  }
+}
