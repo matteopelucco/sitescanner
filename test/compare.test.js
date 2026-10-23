@@ -3,11 +3,25 @@ import assert from 'node:assert/strict';
 import { compareScans, parseRedirectMap, toKey, diffLines, exceedsThreshold } from '../src/core/compare.js';
 
 const pg = (key, o = {}) => ({ key, url: 'https://x' + key, status: 200, isHtml: true, title: 'T', h1: ['H'], textHash: 'a', wordCount: 100, issues: [], links: { internal: [] }, ...o });
-const scan = (id, pages, issues = []) => ({ id, env: 'prod', pages, issues });
+const scan = (id, pages, issues = [], config = {}) => ({ id, env: 'prod', pages, issues, config });
 
 test('toKey normalizes origin, query order and utm params', () => {
   assert.equal(toKey('https://a.com/x?b=2&a=1&utm_source=z#frag'), '/x?a=1&b=2');
   assert.equal(toKey('/x'), '/x');
+});
+
+test('toKey drops known tracking params and site-specific ones', () => {
+  assert.equal(toKey('/a/index.html?intcmp=fi-inter_x&gclid=1&id=3'), '/a/index.html?id=3');
+  assert.equal(toKey('/a?ref_src=x&id=3', ['ref_*']), '/a?id=3');
+});
+
+test('links differing only by tracking params are not a change', () => {
+  const b = scan('a', [pg('/', { links: { internal: ['/x?intcmp=campaign-a', '/y'] } })]);
+  const h = scan('b', [pg('/', { links: { internal: ['/x?intcmp=campaign-b', '/y'] } })]);
+  assert.equal(compareScans(b, h).findings.length, 0);
+  const h2 = scan('b', [pg('/', { links: { internal: ['/x?sid=2', '/y'] } })], [], { ignoreParams: ['sid'] });
+  const b2 = scan('a', [pg('/', { links: { internal: ['/x?sid=1', '/y'] } })], [], { ignoreParams: ['sid'] });
+  assert.equal(compareScans(b2, h2).findings.length, 0);
 });
 
 test('parseRedirectMap accepts header, absolute URLs and separators', () => {

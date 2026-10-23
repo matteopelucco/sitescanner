@@ -30,6 +30,9 @@ Casi d'uso tipici:
 | **Severità** | `error`, `warn` o `info`, assegnata a issue e finding. |
 | **Redirect map** | CSV `from,to` che dichiara quali URL di Base corrispondono a quali URL di Head. |
 | **Label / nota** | Etichetta e testo libero associati a una scan; modificabili dopo la scan senza toccare l'istantanea. |
+| **Inventario** | Crawl di un sito (configurato o URL libero) che ne misura dimensione, struttura e profondità. Non entra nello storico delle scan né nel confronto. |
+| **Job** | Scan o inventario avviato dalla web app ed eseguito in background nel server locale. |
+| **Profondità di click** | Numero minimo di click (link interni) per raggiungere una pagina dalle pagine di partenza. |
 
 ## 1.3 Perimetro
 
@@ -40,7 +43,9 @@ Casi d'uso tipici:
 - screenshot delle pagine tramite browser headless (opzionale);
 - storico locale su filesystem;
 - confronto tra due scan da CLI (adatto alla CI) e da report HTML;
-- export di un bundle condivisibile con due sole scan.
+- export di un bundle condivisibile con due sole scan;
+- web app locale per configurare i siti, lanciare scan e inventari e seguirne l'avanzamento;
+- inventario di un sito: dimensione, sezioni, profondità di click e degli URL, confronto con la sitemap.
 
 **Escluso**
 
@@ -48,7 +53,7 @@ Casi d'uso tipici:
 - crawling di domini esterni e verifica dei link esterni;
 - test funzionali (form, login interattivi, percorsi utente);
 - misure di performance lato browser (Core Web Vitals); si misura solo il tempo di risposta HTTP;
-- archiviazione centralizzata o multiutente dello storico.
+- archiviazione centralizzata o multiutente dello storico; account, autenticazione e pianificazione delle scan nella web app.
 
 ## 1.4 Requisiti non funzionali
 

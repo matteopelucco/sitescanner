@@ -11,10 +11,12 @@ Versione di riferimento: **0.1.0**
 | 5 | [Storico e dati](05-storico-e-dati.md) | Istantanee immutabili, label, riferimenti alle scan |
 | 6 | [Confronto Base/Head](06-confronto.md) | Abbinamento pagine, redirect map, tipi di differenza e severità |
 | 7 | [Report HTML](07-report.md) | Report statico, export condivisibile, server locale |
+| 8 | [Web app](08-web-app.md) | `sitescanner ui`: siti, scan con avanzamento, job, API locale e sua sicurezza |
+| 9 | [Inventario](09-inventario.md) | Misura di dimensione, struttura e profondità di un sito |
 
 ## Convenzioni
 
 - Ogni requisito ha un identificativo stabile (`RF-<AREA>-NN` funzionale, `RNF-NN` non funzionale), da citare in issue, PR e test.
 - **DEVE** indica un comportamento obbligatorio; **PUÒ** un comportamento opzionale o configurabile.
 - Le motivazioni delle scelte architetturali sono nelle [ADR](../adr/README.md); qui si descrive *cosa* fa il sistema, non *perché* è costruito così.
-- Il comportamento verificato automaticamente è indicato con il riferimento al test (`test/e2e.test.js`, `test/compare.test.js`).
+- Il comportamento verificato automaticamente è indicato con il riferimento al test (`test/e2e.test.js`, `test/compare.test.js`, `test/web.test.js`).

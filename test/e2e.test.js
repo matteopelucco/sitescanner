@@ -53,7 +53,9 @@ test('scan, history, compare, report, export', async () => {
 
   // Snapshot is immutable: scan.json is read-only and the site's private area was respected
   const scansDir = path.join(home, 'data', 'demo', 'scans');
-  const ids = fs.readdirSync(scansDir).filter((d) => !d.startsWith('.')).sort();
+  // Ids have one-second resolution: order by startedAt, as listScans does.
+  const startedAt = (id) => JSON.parse(fs.readFileSync(path.join(scansDir, id, 'scan.json'), 'utf8')).startedAt;
+  const ids = fs.readdirSync(scansDir).filter((d) => !d.startsWith('.')).sort((a, b) => startedAt(a).localeCompare(startedAt(b)));
   assert.equal(ids.length, 2);
   const scan1 = JSON.parse(fs.readFileSync(path.join(scansDir, ids[0], 'scan.json'), 'utf8'));
   assert.equal(fs.statSync(path.join(scansDir, ids[0], 'scan.json')).mode & 0o222, 0);

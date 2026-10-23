@@ -69,13 +69,29 @@ export function parseRedirectMap(text) {
   return map;
 }
 
+// Query parameters that only track campaigns/clicks and never identify a different page.
+// A trailing * matches any suffix. Sites can add more with `ignoreParams`.
+export const TRACKING_PARAMS = ['utm_*', 'gclid', 'gclsrc', 'dclid', 'gbraid', 'wbraid', 'fbclid', 'msclkid', 'yclid', 'twclid', 'ttclid', 'li_fat_id', 'mc_cid', 'mc_eid', '_ga', '_gl', 'mkt_tok', 'srsltid', 'intcmp', 'icid', 'cmpid'];
+
+const matcherCache = new Map();
+function paramMatcher(list) {
+  const id = list.join('|');
+  if (!matcherCache.has(id)) {
+    const alts = list.map((p) => String(p).toLowerCase().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'));
+    const re = new RegExp(`^(?:${alts.join('|') || '(?!)'})$`, 'i');
+    matcherCache.set(id, (k) => re.test(k));
+  }
+  return matcherCache.get(id);
+}
+
 // Reduces a URL or path to the page key used by scans: path + normalized query, no origin, no hash.
-export function toKey(u) {
+export function toKey(u, ignoreParams = TRACKING_PARAMS) {
   let s = String(u || '').trim();
+  const ignored = paramMatcher(ignoreParams);
   try {
     const url = new URL(s, 'http://placeholder.invalid');
     const params = [...url.searchParams.entries()]
-      .filter(([k]) => !/^utm_/i.test(k))
+      .filter(([k]) => !ignored(k))
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     const q = params.length ? '?' + new URLSearchParams(params).toString() : '';
     return (url.pathname || '/') + q;
@@ -106,6 +122,9 @@ export function compareScans(base, head, opts = {}) {
     opts.thresholds || {},
   );
   const ignore = new Set(opts.ignore || []);
+  // Re-normalize stored URLs with the tracking params known now, so older scans benefit from new rules too.
+  const ignoreParams = [...new Set([...TRACKING_PARAMS, ...((base.config && base.config.ignoreParams) || []), ...((head.config && head.config.ignoreParams) || [])])];
+  const normKey = (u) => toKey(u, ignoreParams);
   const redirectMap = opts.redirectMap || {};
   const visual = opts.visual || {};
   const findings = [];
@@ -180,8 +199,8 @@ export function compareScans(base, head, opts = {}) {
     }
 
     // Redirect destination
-    const bFinal = b.redirects && b.redirects.length ? toKey(b.finalUrl) : null;
-    const hFinal = h.redirects && h.redirects.length ? toKey(h.finalUrl) : null;
+    const bFinal = b.redirects && b.redirects.length ? normKey(b.finalUrl) : null;
+    const hFinal = h.redirects && h.redirects.length ? normKey(h.finalUrl) : null;
     if (bFinal !== hFinal) {
       add({ ...ctx, type: 'redirect-changed', severity: 'warn', message: `${bFinal || '(nessun redirect)'} → ${hFinal || '(nessun redirect)'}`, base: bFinal, head: hFinal });
     }
@@ -195,7 +214,7 @@ export function compareScans(base, head, opts = {}) {
       ];
       for (const [field, type, sev] of fields) {
         let bv = norm(b[field]), hv = norm(h[field]);
-        if (field === 'canonical') { bv = bv && toKey(bv); hv = hv && toKey(hv); }
+        if (field === 'canonical') { bv = bv && normKey(bv); hv = hv && normKey(hv); }
         if (bv !== hv) add({ ...ctx, type, severity: sev, message: `«${bv || '∅'}» → «${hv || '∅'}»`, base: b[field] ?? null, head: h[field] ?? null });
       }
       if (!arrEq(b.h1, h.h1)) {
@@ -205,7 +224,7 @@ export function compareScans(base, head, opts = {}) {
         const sev = !hasNoindex(b) && hasNoindex(h) ? 'error' : 'warn';
         add({ ...ctx, type: 'robots-changed', severity: sev, message: `«${b.robots || '∅'}» → «${h.robots || '∅'}»`, base: b.robots, head: h.robots });
       }
-      const hrefl = (p) => (p.hreflang || []).map((x) => `${x.lang}=${toKey(x.href)}`).sort();
+      const hrefl = (p) => (p.hreflang || []).map((x) => `${x.lang}=${normKey(x.href)}`).sort();
       if (!arrEq(hrefl(b), hrefl(h))) {
         add({ ...ctx, type: 'hreflang-changed', severity: 'info', message: `${hrefl(b).length} → ${hrefl(h).length} alternate`, base: b.hreflang, head: h.hreflang });
       }
@@ -216,8 +235,8 @@ export function compareScans(base, head, opts = {}) {
         const delta = hw - bw;
         add({ ...ctx, type: 'content-changed', severity: sev, message: `Parole ${bw} → ${hw} (${delta >= 0 ? '+' : ''}${delta}, ${(ratio * 100).toFixed(1)}%)`, base: bw, head: hw });
       }
-      const bl = new Set((b.links && b.links.internal) || []);
-      const hl = new Set((h.links && h.links.internal) || []);
+      const bl = new Set(((b.links && b.links.internal) || []).map(normKey));
+      const hl = new Set(((h.links && h.links.internal) || []).map(normKey));
       const lost = [...bl].filter((x) => !hl.has(x) && !(redirectMap[x] && hl.has(redirectMap[x])));
       const gained = [...hl].filter((x) => !bl.has(x));
       if (lost.length || gained.length) {

@@ -86,10 +86,13 @@ export function writeLabel(site, id, { label, note }) {
   const tmp = f + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(labels, null, 2));
   fs.renameSync(tmp, f);
+  cache.delete(`${site}/${id}`);
   return labels[id];
 }
 
+// Few entries: the web app keeps the process alive and snapshots can be large.
 const cache = new Map();
+const CACHE_SIZE = 8;
 
 export function loadScan(site, id) {
   const k = `${site}/${id}`;
@@ -103,6 +106,7 @@ export function loadScan(site, id) {
     if (overlay.note !== undefined) scan.note = overlay.note;
   }
   cache.set(k, scan);
+  if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value);
   return scan;
 }
 

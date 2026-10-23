@@ -59,6 +59,7 @@ compare:
 | `include` | `[]` | Regex sulla chiave di pagina: se presenti, si visitano solo le pagine che ne soddisfano almeno una. |
 | `exclude` | `[]` | Regex sulla chiave di pagina: le pagine corrispondenti non vengono visitate. |
 | `ignoreQuery` | `false` | Se `true`, la query string viene scartata (`/a?x=1` e `/a` sono la stessa pagina). |
+| `ignoreParams` | `[]` | Parametri di query da ignorare, in aggiunta a quelli di tracciamento predefiniti (vedi [§4.1](04-scansione.md#41-perimetro-del-crawling), RF-CRAWL-05). Un `*` finale indica qualsiasi suffisso (es. `ref_*`). |
 | `userAgent` | `sitescanner/0.1 (+regression-scan)` | User-Agent delle richieste HTTP. |
 | `storeText` | `true` | Salva il testo estratto di ogni pagina, necessario per il diff testuale nel report. |
 | `screenshots.enabled` | `true` | Abilita gli screenshot. |

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sitescanner</title>
+<link rel="stylesheet" href="/app/app.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/"><span class="logo" aria-hidden="true">◎</span> sitescanner</a>
+  <nav class="nav">
+    <a href="#/" data-nav="sites">Siti</a>
+    <a href="#/inventory" data-nav="inventory">Inventari</a>
+    <a href="#/jobs" data-nav="jobs">Attività <span id="jobBadge" class="count" hidden></span></a>
+    <a href="/report/" target="_blank" rel="noopener">Report ↗</a>
+  </nav>
+</header>
+<main id="app"><p class="empty">Caricamento…</p></main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<div id="tip" class="tip" hidden></div>
+<footer class="foot">sitescanner <span id="ver"></span> · <span id="root" class="mono"></span></footer>
+<script type="module" src="/app/app.js"></script>
+</body>
+</html>

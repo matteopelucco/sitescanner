@@ -36,9 +36,12 @@ function computeStats(pages, issues) {
 
 /**
  * Runs a scan and stores it as an immutable snapshot.
+ * `opts.signal` aborts it (nothing is saved); `opts.onProgress` receives the progress events of
+ * crawl and screenshots, then { phase: 'saving' }.
  * @returns {Promise<object>} the snapshot
  */
 export async function scanSite(siteId, envName, opts = {}, log = () => {}) {
+  const { signal = null, onProgress = () => {} } = opts;
   const cfg = loadSite(siteId);
   const env = resolveEnv(cfg, envName);
   const id = newScanId();
@@ -53,7 +56,7 @@ export async function scanSite(siteId, envName, opts = {}, log = () => {}) {
       fs.mkdirSync(keepHtmlDir);
     }
     log(`Scan ${siteId} [${envName}] ${env.baseUrl} → ${id}`);
-    const result = await crawl(cfg, env, { maxPages, keepHtmlDir, log });
+    const result = await crawl(cfg, env, { maxPages, keepHtmlDir, log, signal, onProgress });
     if (!result.pages.length) throw new UserError('Nessuna pagina scansionata: controlla baseUrl, start, include/exclude e robots.txt');
     if (result.pages.every((p) => p.error)) {
       throw new UserError(`Nessuna pagina raggiungibile (${result.pages[0].error}): scan non salvata`);
@@ -63,12 +66,13 @@ export async function scanSite(siteId, envName, opts = {}, log = () => {}) {
     let shots = null;
     if (wantShots) {
       fs.mkdirSync(path.join(staging, 'screenshots'));
-      shots = await captureScreenshots(result.pages, env, cfg.screenshots, staging, log);
+      shots = await captureScreenshots(result.pages, env, cfg.screenshots, staging, log, { signal, onProgress });
     }
     if (cfg.storeText && result.texts.size) {
       fs.writeFileSync(path.join(staging, 'text.json'), JSON.stringify(Object.fromEntries(result.texts)));
     }
 
+    onProgress({ phase: 'saving' });
     const finishedAt = new Date();
     const snapshot = {
       schema: 1,

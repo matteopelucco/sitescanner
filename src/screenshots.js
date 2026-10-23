@@ -13,7 +13,7 @@ export async function loadPlaywright() {
  * Captures screenshots of the HTML pages that answered 2xx. Sets page.screenshot to a path relative to the scan dir.
  * Failures are recorded per page (page.screenshotError) and never abort the scan.
  */
-export async function captureScreenshots(pages, env, opts, outDir, log = () => {}) {
+export async function captureScreenshots(pages, env, opts, outDir, log = () => {}, { signal = null, onProgress = () => {} } = {}) {
   const pw = await loadPlaywright();
   if (!pw) {
     log('Playwright non installato: screenshot saltati (npm i playwright && npx playwright install chromium)');
@@ -40,9 +40,10 @@ export async function captureScreenshots(pages, env, opts, outDir, log = () => {
 
   const targets = pages.filter((p) => p.isHtml && !p.error && p.status >= 200 && p.status < 300);
   let idx = 0, done = 0;
+  onProgress({ phase: 'screenshots', done, limit: targets.length });
   const worker = async () => {
     const tab = await context.newPage();
-    while (idx < targets.length) {
+    while (idx < targets.length && !signal?.aborted) {
       const p = targets[idx++];
       const file = `screenshots/${sha1(p.key).slice(0, 12)}.png`;
       try {
@@ -62,6 +63,7 @@ export async function captureScreenshots(pages, env, opts, outDir, log = () => {
       }
       done++;
       log(`[screenshot ${done}/${targets.length}] ${p.screenshotError ? 'ERR ' : ''}${p.key}`);
+      onProgress({ phase: 'screenshots', done, limit: targets.length, current: p.key });
     }
     await tab.close();
   };
@@ -70,5 +72,6 @@ export async function captureScreenshots(pages, env, opts, outDir, log = () => {
   } finally {
     await browser.close();
   }
+  signal?.throwIfAborted();
   return { captured: targets.filter((p) => p.screenshot).length };
 }

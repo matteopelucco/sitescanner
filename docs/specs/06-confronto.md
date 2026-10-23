@@ -28,7 +28,7 @@ Per le pagine presenti in entrambe le scan:
 
 - status, errore e destinazione dei redirect sono sempre confrontati;
 - i campi di contenuto (title, description, canonical, lang, H1, meta robots, hreflang, testo, link, tempo di risposta) sono confrontati **solo se entrambe le pagine sono 2xx senza errori**;
-- i testi sono confrontati dopo la normalizzazione degli spazi; canonical e hreflang dopo la riduzione a chiave di pagina;
+- i testi sono confrontati dopo la normalizzazione degli spazi; canonical, hreflang, destinazioni dei redirect e link interni dopo la riduzione a chiave di pagina, rimuovendo i parametri di tracciamento predefiniti e quelli di `ignoreParams` registrati nella configurazione di **entrambe** le scan (così anche scan salvate prima di una nuova regola ne beneficiano);
 - le issue di pagina sono confrontate per codice: un codice presente solo in Head è `issue-new`, solo in Base è `issue-resolved`;
 - le issue tra pagine (duplicati) sono confrontate per codice e valore duplicato, `broken-links` come issue di pagina.
 

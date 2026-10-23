@@ -7,7 +7,8 @@ sitescanner scan    --all --env <env> [--label <txt>] [--note <txt>] [--no-scree
 sitescanner list    [--site <id>]
 sitescanner label   --site <id> --scan <ref> --label <txt> [--note <txt>]
 sitescanner report  [--site <id>] [--out report/]
-sitescanner serve   [--port 4173]
+sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
+sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
 sitescanner export  --site <id> --base <ref> --head <ref> --out bundle/
 sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
 ```
@@ -28,9 +29,9 @@ sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv]
 
 | ID | Requisito |
 |---|---|
-| RF-INIT-01 | Crea `sites/`, `data/`, `report/` se mancanti. |
+| RF-INIT-01 | Crea `sites/`, `data/`, `report/`, `inventory/` se mancanti. |
 | RF-INIT-02 | Crea `sites/example.yml` commentato con tutte le opzioni; se esiste già NON lo modifica e lo segnala. |
-| RF-INIT-03 | Crea un `.gitignore` con `report/` e `bundle/` solo se nella cartella non ne esiste già uno. |
+| RF-INIT-03 | Crea un `.gitignore` con `report/`, `bundle/` e `inventory/` solo se nella cartella non ne esiste già uno. |
 
 ## 3.3 `scan`
 
@@ -72,16 +73,28 @@ sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv]
 | RF-REP-03 | Stampa il percorso del report e il numero di siti e scan inclusi. |
 | RF-REP-04 | Rigenerare il report è idempotente: i dati di scan già presenti nel report non vengono riscritti; i dati di scan non più esistenti vengono rimossi. |
 
-## 3.7 `serve`
+## 3.7 `ui` (alias `serve`)
 
 | ID | Requisito |
 |---|---|
-| RF-SERVE-01 | Avvia un server HTTP su `127.0.0.1:<port>` (default 4173) che espone `report/` sotto `/report/` e `data/` sotto `/data/`; `/` reindirizza a `/report/`. |
-| RF-SERVE-02 | Qualsiasi path fuori da `report/` e `data/` (compresi tentativi di path traversal) risponde 404. |
+| RF-SERVE-01 | Avvia un server HTTP su `<host>:<port>` (default `127.0.0.1:4173`) che espone la web app su `/` (vedi [§8](08-web-app.md)), la sua API su `/api/`, `report/` sotto `/report/` e `data/` sotto `/data/`. `/report` reindirizza a `/report/`. |
+| RF-SERVE-02 | Qualsiasi path fuori dalla web app, da `report/` e da `data/` (compresi tentativi di path traversal) risponde 404. |
 | RF-SERVE-03 | Se `report/index.html` non esiste, il report viene generato prima di avviare il server. |
-| RF-SERVE-04 | Il server resta attivo fino a Ctrl+C. |
+| RF-SERVE-04 | Il server resta attivo fino a Ctrl+C. Stampa l'URL della web app, quello del report e la cartella di lavoro. |
+| RF-SERVE-05 | Porta già in uso → errore d'uso con l'indicazione di `--port`. |
+| RF-SERVE-06 | `--host` diverso da un indirizzo di loopback produce un avviso: la web app è raggiungibile da altre macchine senza autenticazione. |
+| RF-SERVE-07 | `--open` apre la web app nel browser predefinito. |
 
-## 3.8 `export`
+## 3.8 `inventory`
+
+| ID | Requisito |
+|---|---|
+| RF-INVC-01 | È obbligatorio esattamente uno tra `--url` e `--site`; con `--site` serve anche `--env`. |
+| RF-INVC-02 | Esegue e salva un inventario (vedi [§9](09-inventario.md)); `--max-pages`, `--max-depth`, `--concurrency` (interi positivi) sostituiscono i default. |
+| RF-INVC-03 | Stampa: URL visitati e pagine HTML, conteggi per classe di status, profondità di click (max, media, istogramma), profondità URL, pagine non collegate, dati della sitemap, le prime 15 sezioni e l'eventuale troncamento. |
+| RF-INVC-04 | `--json out.json` scrive l'inventario completo; `--quiet`/`-q` sopprime l'avanzamento. |
+
+## 3.9 `export`
 
 | ID | Requisito |
 |---|---|
@@ -90,7 +103,7 @@ sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv]
 | RF-EXP-03 | Il bundle DEVE funzionare aperto da file e una volta spostato o compresso, senza riferimenti a `data/`. |
 | RF-EXP-04 | Se `--out` esiste, non è vuota e non contiene un bundle precedente (`index.html`), il comando rifiuta di scriverci. Se contiene un bundle precedente, ne sostituisce dati e screenshot. |
 
-## 3.9 `compare`
+## 3.10 `compare`
 
 | ID | Requisito |
 |---|---|

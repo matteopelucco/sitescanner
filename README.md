@@ -1,6 +1,6 @@
 # sitescanner
 
-CLI che scansiona uno o più siti web, salva ogni scansione come **istantanea immutabile** (as-is), mantiene lo **storico** per sito e genera un **report HTML5 statico** per confrontare due scansioni qualsiasi (Base × Head) come regression test.
+CLI e web app locale che scansiona uno o più siti web, salva ogni scansione come **istantanea immutabile** (as-is), mantiene lo **storico** per sito e genera un **report HTML5 statico** per confrontare due scansioni qualsiasi (Base × Head) come regression test. Con l'**inventario** misura dimensione, struttura e profondità di un sito qualsiasi.
 
 ## Installazione
 
@@ -17,13 +17,19 @@ Playwright è una dipendenza opzionale: senza, le scan funzionano lo stesso e gl
 ## Avvio rapido
 
 ```sh
-sitescanner init                                        # crea sites/, data/, report/ e sites/example.yml
+sitescanner init                                        # crea sites/, data/, report/, inventory/ e sites/example.yml
+sitescanner ui --open                                   # web app su http://127.0.0.1:4173/
+```
+
+Oppure da terminale:
+
+```sh
 # modifica sites/example.yml (baseUrl, ambienti…), poi:
 sitescanner scan --site example --env prod --label v1
 # … deploy …
 sitescanner scan --site example --env prod --label v2
 sitescanner compare --site example --base v1 --head v2 --fail-on error
-sitescanner report && sitescanner serve                 # http://127.0.0.1:4173/report/
+sitescanner report && sitescanner ui                    # report su http://127.0.0.1:4173/report/
 ```
 
 Tutti i comandi lavorano sulla cartella corrente (o su `SITESCANNER_HOME`, se impostata).
@@ -37,7 +43,8 @@ sitescanner scan    --all --env <env> [--label <txt>]
 sitescanner list    [--site <id>]
 sitescanner label   --site <id> --scan <id> --label <txt> [--note <txt>]
 sitescanner report  [--site <id>] [--out report/]
-sitescanner serve   [--port 4173]
+sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
+sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
 sitescanner export  --site <id> --base <x> --head <y> --out bundle/
 sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
 ```
@@ -45,7 +52,9 @@ sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--
 - **scan `--all`**: scansiona in sequenza tutti i siti di `sites/`. Ogni sito è isolato: un errore (configurazione non valida, sito irraggiungibile) viene riportato nel riepilogo finale senza fermare gli altri. I siti che non definiscono l'ambiente richiesto vengono saltati. Exit code 1 se almeno un sito è fallito.
 - **Riferimenti a una scan** (`--scan`, `--base`, `--head`): id completo, prefisso univoco dell'id, label (vince la più recente), `latest`, `latest~N` (N scan prima dell'ultima).
 - **label**: modifica label e nota *dopo* la scan senza toccare l'istantanea (vedi «Dati»).
-- **report**: genera `report/index.html`. Si apre anche con doppio clic (`file://`); con `serve` è disponibile in più il «Pixel diff» calcolato nel browser.
+- **report**: genera `report/index.html`. Si apre anche con doppio clic (`file://`); con `ui` è disponibile in più il «Pixel diff» calcolato nel browser.
+- **ui**: avvia la web app (vedi «Web app»). Ascolta solo su `127.0.0.1` per default; con `--host` diverso la web app è raggiungibile da altre macchine **senza autenticazione**.
+- **inventory**: misura un sito (vedi «Inventario») e lo salva in `inventory/`.
 - **export**: crea una cartella autonoma con il report limitato alle due scan e i relativi screenshot copiati, già preselezionati come Base/Head. Si può zippare e condividere.
 - **compare**: confronto da terminale/CI. `--fail-on error|warn` fa uscire con codice 1 se esistono differenze di quel livello o superiore; `--json` salva il risultato completo; `--visual` confronta pixel per pixel gli screenshot; `--redirect-map` accoppia URL vecchi e nuovi (CSV `from,to`, URL assoluti o path).
 
@@ -67,6 +76,7 @@ Un file YAML per sito in `sites/`; il nome del file è l'id. Vedi l'esempio comm
 | `respectRobots` | `true` | |
 | `include` / `exclude` | `[]` | regex sul path |
 | `ignoreQuery` | `false` | |
+| `ignoreParams` | `[]` | parametri di query da ignorare oltre a quelli di tracciamento già noti (`utm_*`, `gclid`, `fbclid`, `intcmp`, …); `*` finale = qualsiasi suffisso |
 | `storeText` | `true` | salva il testo estratto: abilita il diff testuale nel report |
 | `screenshots` | abilitati | `width`, `height`, `fullPage`, `maxHeight`, `waitMs`, `concurrency`, `hide` (selettori da nascondere) |
 | `compare.ignore` | `[]` | tipi di differenza da ignorare |
@@ -97,6 +107,34 @@ Credenziali e header sensibili vengono mascherati nella copia della configurazio
 | `issue-new` / `issue-resolved` | severità della issue / info |
 | `visual-changed` | warn oltre `visualWarn`, info oltre `visualInfo` (solo con `--visual`) |
 
+## Web app
+
+`sitescanner ui` avvia sul proprio computer una web app con:
+
+- **Siti**: elenco con ultima scan ed errori; creazione e modifica della configurazione con un form (che conserva i commenti del YAML) o direttamente in YAML; eliminazione (lo storico resta).
+- **Scan**: avvio per ambiente con label, nota, limite di pagine e opzione senza screenshot; avanzamento in tempo reale (fase, pagine visitate/scoperte, URL corrente) e annullamento; storico con label modificabili e link «Confronta con la precedente» al report.
+- **Inventari**: avvio su un sito configurato o su un URL qualsiasi, elenco e dettaglio.
+- **Attività**: tutti i job della sessione, con log.
+
+Le scan avviate dalla web app sono identiche a quelle da CLI e il report viene rigenerato dopo ognuna. I job vivono nel processo del server: se lo si chiude, una scan in corso va persa (senza lasciare dati parziali).
+
+## Inventario
+
+Un crawl senza screenshot e senza confronto, con limiti alti (5000 URL, profondità 50), per sapere quanto è grande un sito e com'è fatto:
+
+- URL e pagine HTML, distribuzione degli status e dei content type, peso e tempo di risposta;
+- **profondità di click** dalla home (minimo numero di link da seguire) e **profondità degli URL** (segmenti del path), con istogrammi;
+- sezioni (primo livello del path) e albero degli URL;
+- pagine presenti solo in sitemap (non collegate), pagine collegate assenti dalla sitemap;
+- pagine con più link entranti e più profonde; tabella di tutti gli URL, esportabile in CSV.
+
+```sh
+sitescanner inventory --url https://www.example.com/ --max-pages 20000
+sitescanner inventory --site shop --env prod --json inventario.json
+```
+
+Gli inventari non entrano nello storico delle scan né nel report.
+
 ## Report
 
 Si sceglie un sito e due scan dalla sua storia (Base e Head, invertibili). Il report mostra l'esito (regressioni / da verificare / nessuna regressione), i contatori, e quattro schede:
@@ -118,6 +156,7 @@ data/<id>/scans/<scanId>/screenshots/*.png
 data/<id>/scans/<scanId>/html/*.html      solo con --keep-html
 data/<id>/labels.json                     label/note modificate dopo la scan
 report/                                   generato, rigenerabile
+inventory/<id>.json                       inventari (inventory/<id>.meta.json: solo riepilogo)
 ```
 
 Una scan viene scritta in una cartella temporanea e spostata al suo posto solo a scansione completata (un'interruzione non lascia scan parziali); i file vengono poi resi di sola lettura. Ogni `scan.json` contiene anche la versione del tool, le opzioni usate e una copia della configurazione (con hash), così resta interpretabile anche se la configurazione cambia. Se nessuna pagina risponde la scan non viene salvata.
@@ -140,7 +179,7 @@ sitescanner compare --site shop --base release --head latest --fail-on error --j
 npm test
 ```
 
-I test avviano un piccolo sito locale in due versioni e verificano scan, storico, confronto, redirect map, label, report ed export.
+I test avviano un piccolo sito locale in due versioni e verificano scan, storico, confronto, redirect map, label, report ed export; `test/web.test.js` verifica API della web app, job, inventario e protezioni del server.
 
 Il modulo [src/core/compare.js](src/core/compare.js) non ha dipendenze ed è incluso così com'è nel report: CLI e browser usano la stessa logica di confronto.
 
@@ -148,4 +187,4 @@ Il modulo [src/core/compare.js](src/core/compare.js) non ha dipendenze ed è inc
 
 - Il crawler legge l'HTML restituito dal server: i contenuti generati solo lato client non vengono analizzati (compaiono però negli screenshot).
 - Il supporto a robots.txt copre `User-agent`, `Allow`, `Disallow` con `*` e `$`.
-- Il «Pixel diff» nel report richiede `sitescanner serve` (i browser bloccano la lettura dei pixel da `file://`); le altre modalità funzionano ovunque.
+- Il «Pixel diff» nel report richiede `sitescanner ui` (i browser bloccano la lettura dei pixel da `file://`); le altre modalità funzionano ovunque.

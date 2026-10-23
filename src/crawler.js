@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { analyzeHtml, pageIssues, siteIssues, sha1 } from './analyze.js';
-import { toKey } from './core/compare.js';
+import { toKey, TRACKING_PARAMS } from './core/compare.js';
 
 const MAX_BODY = 10 * 1024 * 1024;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -58,9 +58,11 @@ function extractLocs(xml) {
 
 /**
  * Crawls one environment of a site.
- * @returns {Promise<{pages: object[], issues: object[], texts: Map<string,string>, robots: object|null, sitemapUrls: number}>}
+ * `signal` aborts the crawl (the promise rejects with an AbortError); `onProgress` receives
+ * { phase: 'robots'|'sitemap'|'crawl', done, limit, discovered, current } as the crawl advances.
+ * @returns {Promise<{pages: object[], issues: object[], texts: Map<string,string>, sitemapUrls: number, unvisited: number, seeds: {start: string[], sitemap: string[]}}>}
  */
-export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () => {} } = {}) {
+export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () => {}, signal = null, onProgress = () => {} } = {}) {
   const base = new URL(env.baseUrl);
   const origin = base.origin;
   const scopePrefix = base.pathname.endsWith('/') ? base.pathname : base.pathname.replace(/[^/]*$/, '');
@@ -73,10 +75,11 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
     headers.authorization = 'Basic ' + Buffer.from(`${env.auth.username}:${env.auth.password || ''}`).toString('base64');
   }
 
+  const ignoreParams = [...TRACKING_PARAMS, ...(cfg.ignoreParams || [])];
   const keyOf = (u) => {
     const url = new URL(u);
     if (cfg.ignoreQuery) url.search = '';
-    return toKey(url.pathname + url.search);
+    return toKey(url.pathname + url.search, ignoreParams);
   };
   const inScope = (u) => {
     try {
@@ -92,22 +95,26 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
     return true;
   };
 
+  const timeout = () => (signal ? AbortSignal.any([signal, AbortSignal.timeout(cfg.timeoutMs)]) : AbortSignal.timeout(cfg.timeoutMs));
+
   async function request(url, accept) {
     const h = accept ? { ...headers, accept } : headers;
-    return fetch(url, { headers: h, redirect: 'manual', signal: AbortSignal.timeout(cfg.timeoutMs) });
+    return fetch(url, { headers: h, redirect: 'manual', signal: timeout() });
   }
 
   async function getText(url) {
     try {
-      const r = await fetch(url, { headers, signal: AbortSignal.timeout(cfg.timeoutMs) });
+      const r = await fetch(url, { headers, signal: timeout() });
       if (!r.ok) return null;
       return await r.text();
     } catch {
+      signal?.throwIfAborted();
       return null;
     }
   }
 
   // robots.txt
+  onProgress({ phase: 'robots', done: 0, limit, discovered: 0 });
   let robots = null;
   if (cfg.respectRobots || cfg.sitemap === true) {
     const txt = await getText(origin + '/robots.txt');
@@ -119,7 +126,9 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
   const seeds = [];
   for (const s of cfg.start) seeds.push(new URL(s, env.baseUrl).toString());
   let sitemapUrls = 0;
+  const sitemapSeeds = [];
   if (cfg.sitemap) {
+    onProgress({ phase: 'sitemap', done: 0, limit, discovered: 0 });
     const roots = Array.isArray(cfg.sitemap)
       ? cfg.sitemap.map((s) => new URL(s, env.baseUrl).toString())
       : [...new Set([new URL('sitemap.xml', origin + scopePrefix).toString(), ...((robots && robots.sitemaps) || [])])];
@@ -139,6 +148,7 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
           const u = new URL(l);
           const rebased = new URL(u.pathname + u.search, origin).toString();
           seeds.push(rebased);
+          sitemapSeeds.push(rebased);
           sitemapUrls++;
         } catch { /* ignore */ }
       }
@@ -225,6 +235,7 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
         if (len) page.bytes = len;
       }
     } catch (e) {
+      signal?.throwIfAborted();
       page.error = e.name === 'TimeoutError' ? `Timeout dopo ${cfg.timeoutMs} ms` : (e.cause && e.cause.code) || e.message;
     }
     page.responseMs = Math.round(performance.now() - t0);
@@ -238,15 +249,18 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
     nextLevel = [];
     let idx = 0;
     const worker = async () => {
-      while (idx < batch.length) {
+      while (idx < batch.length && !signal?.aborted) {
         const item = batch[idx++];
         const p = await fetchPage(item);
         pages.set(p.key, p);
         log(`[${pages.size}/${limit}] ${p.error ? 'ERR' : p.status} ${p.key}${p.redirects.length ? ' → ' + p.finalUrl : ''}`);
+        onProgress({ phase: 'crawl', done: pages.size, limit, discovered: queued.size, current: p.key });
         if (cfg.delayMs) await sleep(cfg.delayMs);
       }
     };
+    onProgress({ phase: 'crawl', done: pages.size, limit, discovered: queued.size });
     await Promise.all(Array.from({ length: Math.max(1, cfg.concurrency) }, worker));
+    signal?.throwIfAborted();
     level = nextLevel;
   }
 
@@ -257,5 +271,9 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
     if (p.redirectBroken) p.issues.push({ code: 'redirect-broken', severity: 'error', message: `Il redirect termina con status ${p.finalStatus}` });
   }
   const issues = siteIssues(list);
-  return { pages: list, issues, texts, sitemapUrls, unvisited: queued.size - pages.size };
+  const seedKeys = (urls) => [...new Set(urls.filter(inScope).map(keyOf))].sort();
+  return {
+    pages: list, issues, texts, sitemapUrls, unvisited: queued.size - pages.size,
+    seeds: { start: seedKeys(seeds.slice(0, cfg.start.length)), sitemap: seedKeys(sitemapSeeds) },
+  };
 }

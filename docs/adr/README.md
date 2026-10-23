@@ -14,3 +14,6 @@
 | 0008 | [Tre livelli di severità fissi per tipo di differenza, con soglie configurabili e `--fail-on` per la CI](0008-tre-livelli-di-severita-e-fail-on-per-la-ci.md) | proposed | 2026-10-22 |
 | 0009 | [Crawling in ampiezza per livelli ordinati, per ottenere scan deterministiche](0009-crawling-per-livelli-ordinati.md) | proposed | 2026-10-22 |
 | 0010 | [Non salvare le scan in cui nessuna pagina è raggiungibile](0010-non-salvare-scan-senza-pagine-raggiungibili.md) | proposed | 2026-10-22 |
+| 0011 | [Job in background nel processo del server, con avanzamento via Server-Sent Events](0011-job-in-background-nel-processo-del-server-con-avanzamento-vi.md) | proposed | 2026-10-23 |
+| 0012 | [Server locale della web app: solo loopback, controllo di Host e Origin, scritture solo JSON](0012-server-locale-della-web-app-solo-loopback-controllo-di-host.md) | proposed | 2026-10-23 |
+| 0013 | [Inventario del sito come crawl separato dalle scan, senza storico né confronto](0013-inventario-del-sito-come-crawl-separato-dalle-scan-senza-sto.md) | proposed | 2026-10-23 |

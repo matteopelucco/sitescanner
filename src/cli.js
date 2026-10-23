@@ -7,6 +7,7 @@ import { scanSite, activeStaging } from './scan.js';
 import { compareScans, exceedsThreshold, parseRedirectMap, FINDING_TYPES } from './core/compare.js';
 import { buildReport } from './report/build.js';
 import { serve } from './server.js';
+import { runInventory } from './inventory.js';
 import { TOOL } from './version.js';
 
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -23,7 +24,8 @@ Uso:
   sitescanner list    [--site <id>]
   sitescanner label   --site <id> --scan <id> --label <txt> [--note <txt>]
   sitescanner report  [--site <id>] [--out report/]
-  sitescanner serve   [--port 4173]
+  sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
+  sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
   sitescanner export  --site <id> --base <x> --head <y> --out bundle/
   sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
 
@@ -41,7 +43,11 @@ const SPECS = {
   list: { site: { type: 'string' } },
   label: { site: { type: 'string' }, scan: { type: 'string' }, label: { type: 'string' }, note: { type: 'string' } },
   report: { site: { type: 'string' }, out: { type: 'string' } },
-  serve: { port: { type: 'string' } },
+  ui: { port: { type: 'string' }, host: { type: 'string' }, open: { type: 'boolean' } },
+  inventory: {
+    url: { type: 'string' }, site: { type: 'string' }, env: { type: 'string' }, 'max-pages': { type: 'string' }, 'max-depth': { type: 'string' },
+    concurrency: { type: 'string' }, json: { type: 'string' }, quiet: { type: 'boolean', short: 'q' },
+  },
   export: { site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, out: { type: 'string' } },
   compare: {
     site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, 'redirect-map': { type: 'string' },
@@ -75,7 +81,7 @@ function fmtDate(iso) {
 // ---------------- commands ----------------
 
 function cmdInit() {
-  for (const d of [dirs.sites, dirs.data, dirs.report]) fs.mkdirSync(d, { recursive: true });
+  for (const d of [dirs.sites, dirs.data, dirs.report, dirs.inventory]) fs.mkdirSync(d, { recursive: true });
   const ex = path.join(dirs.sites, 'example.yml');
   if (fs.existsSync(ex)) console.log(dim(`${ex} esiste già: non modificato`));
   else {
@@ -83,8 +89,8 @@ function cmdInit() {
     console.log(`Creato ${ex}`);
   }
   const gi = path.join(path.dirname(dirs.data), '.gitignore');
-  if (!fs.existsSync(gi)) fs.writeFileSync(gi, 'report/\nbundle/\n');
-  console.log(`Cartelle pronte: sites/ data/ report/\nProssimo passo: sitescanner scan --site example --env prod`);
+  if (!fs.existsSync(gi)) fs.writeFileSync(gi, 'report/\nbundle/\ninventory/\n');
+  console.log(`Cartelle pronte: sites/ data/ report/ inventory/\nProssimo passo: sitescanner ui (web app) oppure sitescanner scan --site example --env prod`);
   return 0;
 }
 
@@ -179,15 +185,60 @@ function cmdReport(o) {
   return 0;
 }
 
-async function cmdServe(o) {
+async function cmdUi(o) {
   const port = positiveInt(o.port, 'port') || 4173;
+  const host = o.host || '127.0.0.1';
   if (!fs.existsSync(path.join(dirs.report, 'index.html'))) {
     console.log(dim('report/ non trovato: lo genero ora…'));
     buildReport({ outDir: dirs.report });
   }
-  await serve({ port });
-  console.log(`Report su http://127.0.0.1:${port}/report/  (Ctrl+C per uscire)`);
+  try {
+    await serve({ port, host });
+  } catch (e) {
+    if (e.code === 'EADDRINUSE') throw new UserError(`La porta ${port} è già in uso: scegline un'altra con --port`);
+    throw e;
+  }
+  const url = `http://${host.includes(':') ? `[${host}]` : host}:${port}/`;
+  console.log(`${bold('sitescanner')} su ${url}  ·  report: ${url}report/  (Ctrl+C per uscire)`);
+  console.log(dim(`Cartella di lavoro: ${path.dirname(dirs.data)}`));
+  if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
+    console.log(yellow(`Attenzione: in ascolto su ${host}, la web app è raggiungibile da altre macchine senza autenticazione.`));
+  }
+  if (o.open) {
+    const { spawn } = await import('node:child_process');
+    const opener = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+    spawn(opener[0], opener[1], { stdio: 'ignore', detached: true }).on('error', () => {}).unref();
+  }
   return new Promise(() => {});
+}
+
+async function cmdInventory(o) {
+  if (!o.url && !o.site) throw new UserError('Specifica --url <url> oppure --site <id> --env <env>');
+  if (o.url && o.site) throw new UserError('--url e --site sono alternativi');
+  if (o.site) need(o, 'env');
+  const opts = {
+    url: o.url, site: o.site, env: o.env,
+    maxPages: positiveInt(o['max-pages'], 'max-pages'), maxDepth: positiveInt(o['max-depth'], 'max-depth'), concurrency: positiveInt(o.concurrency, 'concurrency'),
+  };
+  const log = o.quiet ? () => {} : (m) => console.log(dim(m));
+  const inv = await runInventory(opts, { log });
+  const s = inv.summary;
+  const hist = (h) => Object.entries(h).sort((a, b) => Number(a[0]) - Number(b[0])).map(([k, v]) => `${k}:${v}`).join(' ');
+  console.log(`\n${green('✓ ')}${bold('Inventario')} ${inv.baseUrl} ${dim(inv.id)}`);
+  console.log(`URL visitati ${bold(s.urls)} · pagine HTML ${bold(s.htmlPages)} · 2xx ${s.byStatus['2xx']} · 3xx ${s.byStatus['3xx']} · 4xx ${s.byStatus['4xx']} · 5xx ${s.byStatus['5xx']} · errori ${s.byStatus.fail}`);
+  console.log(`Profondità di click: max ${bold(s.clickDepth.max ?? '-')} · media ${s.clickDepth.avg ?? '-'} · ${dim(hist(s.clickDepth.histogram))}`);
+  console.log(`Profondità URL:      max ${bold(s.urlDepth.max ?? '-')} · ${dim(hist(s.urlDepth.histogram))}`);
+  console.log(`Non collegate dalla home ${s.clickDepth.notLinked} · sitemap: ${s.sitemap.listed} URL, ${s.sitemap.notLinked} non collegati, ${s.sitemap.missing} pagine assenti dalla sitemap`);
+  console.log(bold('\nSezioni'));
+  for (const x of s.sections.slice(0, 15)) console.log(`  ${pad(x.section, 30)} ${pad(x.pages, 7)} ${dim(`click max ${x.maxClickDepth ?? '-'} · media ${x.avgClickDepth ?? '-'}`)}`);
+  if (s.sections.length > 15) console.log(dim(`  … altre ${s.sections.length - 15}`));
+  if (inv.crawl.truncated) console.log(yellow(`\nTroncato a ${inv.options.maxPages} URL: ${inv.crawl.unvisited} scoperti e non visitati (aumenta --max-pages)`));
+  if (o.json) {
+    fs.mkdirSync(path.dirname(path.resolve(o.json)), { recursive: true });
+    fs.writeFileSync(o.json, JSON.stringify(inv, null, 2));
+    console.log(dim(`\nRisultato JSON: ${path.resolve(o.json)}`));
+  }
+  return 0;
 }
 
 function cmdExport(o) {
@@ -261,10 +312,12 @@ async function cmdCompare(o) {
   return failed ? 1 : 0;
 }
 
-const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, serve: cmdServe, export: cmdExport, compare: cmdCompare };
+const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, ui: cmdUi, inventory: cmdInventory, export: cmdExport, compare: cmdCompare };
+const ALIASES = { serve: 'ui' };
 
 export async function main(argv) {
-  const [cmd, ...rest] = argv;
+  let [cmd, ...rest] = argv;
+  cmd = ALIASES[cmd] || cmd;
   if (!cmd || cmd === '-h' || cmd === '--help' || cmd === 'help') {
     process.stdout.write(HELP);
     return 0;
