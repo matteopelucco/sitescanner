@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { dirs, UserError } from './config.js';
+import { dirs, validSiteId, UserError } from './config.js';
 
 // Layout:
 //   data/<site>/scans/<scanId>/scan.json        immutable snapshot (read-only on disk)
@@ -52,6 +52,29 @@ export function commitScan(site, id, stagingDir, snapshot) {
 
 export function discardStaging(stagingDir) {
   fs.rmSync(stagingDir, { recursive: true, force: true });
+}
+
+function makeWritable(p) {
+  const st = fs.lstatSync(p);
+  if (st.isSymbolicLink()) return;
+  fs.chmodSync(p, st.isDirectory() ? 0o755 : 0o644);
+  if (st.isDirectory()) for (const f of fs.readdirSync(p)) makeWritable(path.join(p, f));
+}
+
+/**
+ * Deletes the whole history of a site (snapshots, screenshots, text, labels): the only exception to
+ * RF-DATA-13, on explicit request. Snapshot files are read-only, so they are made writable first.
+ * @returns {number} the number of scans deleted
+ */
+export function deleteSiteData(site) {
+  if (!validSiteId(site)) throw new UserError(`Id sito non valido: ${site}`);
+  const dir = siteDataDir(site);
+  if (!fs.existsSync(dir)) return 0;
+  const n = listScans(site).length;
+  makeWritable(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+  for (const k of [...cache.keys()]) if (k.startsWith(`${site}/`)) cache.delete(k);
+  return n;
 }
 
 export function listDataSites() {

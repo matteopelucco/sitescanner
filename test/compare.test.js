@@ -64,3 +64,37 @@ test('diffLines', () => {
   const d = diffLines('a\nb\nc', 'a\nx\nc');
   assert.deepEqual(d.map((o) => o.op + o.text), ['=a', '-b', '+x', '=c']);
 });
+
+test('issues of rules that Base did not run are info, not regressions', () => {
+  const iss = { code: 'canonical-broken', severity: 'error', message: 'x' };
+  const head = { ...scan('b', [pg('/', { issues: [iss] })]), options: { issueCodes: ['canonical-broken', 'h1-missing'] } };
+  const off = { ...scan('a', [pg('/')]), options: { issueCodes: ['h1-missing'] } };
+  let f = compareScans(off, head).findings.find((x) => x.type === 'issue-new');
+  assert.equal(f.severity, 'info');
+  assert.match(f.message, /non attiva in Base/);
+  const base = { ...scan('a', [pg('/')]), options: { issueCodes: ['canonical-broken'] } };
+  f = compareScans(base, head).findings.find((x) => x.type === 'issue-new');
+  assert.equal(f.severity, 'error');
+  // a rule disabled in Head resolves nothing
+  const b2 = { ...scan('a', [pg('/', { issues: [iss] })]), options: { issueCodes: ['canonical-broken'] } };
+  const h2 = { ...scan('b', [pg('/')]), options: { issueCodes: [] } };
+  assert.ok(!compareScans(b2, h2).findings.some((x) => x.type === 'issue-resolved'));
+});
+
+test('indexability and structured data changes', () => {
+  let r = compareScans(scan('a', [pg('/')]), scan('b', [pg('/', { xRobots: 'noindex' })]));
+  assert.equal(r.findings.find((f) => f.type === 'indexability-changed').severity, 'error');
+  // a new meta noindex is already reported by robots-changed
+  r = compareScans(scan('a', [pg('/')]), scan('b', [pg('/', { robots: 'noindex' })]));
+  assert.ok(!r.findings.some((f) => f.type === 'indexability-changed'));
+  assert.ok(r.findings.some((f) => f.type === 'robots-changed' && f.severity === 'error'));
+
+  const sd = (types) => ({ structuredData: { types, invalid: 0 } });
+  r = compareScans(scan('a', [pg('/', sd(['Organization', 'Product']))]), scan('b', [pg('/', sd(['Organization', 'BreadcrumbList']))]));
+  const f = r.findings.find((x) => x.type === 'structured-data-changed');
+  assert.equal(f.severity, 'warn');
+  assert.match(f.message, /rimossi Product · aggiunti BreadcrumbList/);
+  // older scans without the field are not compared
+  r = compareScans(scan('a', [pg('/')]), scan('b', [pg('/', sd(['Organization']))]));
+  assert.ok(!r.findings.some((x) => x.type === 'structured-data-changed'));
+});

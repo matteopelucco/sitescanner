@@ -28,6 +28,8 @@ Opzione scelta (implementata nella 0.1.0, da confermare): "modulo puro condiviso
 
 Vincolo: `src/core/compare.js` non può avere `import`, né usare API di Node o del DOM. Il generatore del report rimuove le parole chiave `export` e lo incorpora in uno `<script>`.
 
+Estensione (2026-10-24): lo stesso schema vale per `src/core/diagnose.js` (diagnostica di una singola scan) e `src/core/print.js` (documento di stampa per il PDF, ADR-0015). I moduli di `src/core/` sono incorporati nello stesso `<script>`, in ordine, quindi condividono lo scope: possono importare solo da altri moduli di `src/core/` già incorporati prima di loro (`diagnose.js` importa da `compare.js`), e il generatore rimuove anche le righe `import`. Per lo stesso motivo i nomi di primo livello non devono coincidere con globali del browser (es. `document`, `print`, `name`).
+
 ### Conseguenze
 
 * Positivo, perché un solo codice, coperto dagli stessi test, per CLI e report.

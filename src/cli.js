@@ -5,6 +5,7 @@ import { dirs, listSiteIds, loadSite, UserError, EXAMPLE_SITE } from './config.j
 import { listScans, listDataSites, loadScan, resolveScanRef, writeLabel, scanDir } from './store.js';
 import { scanSite, activeStaging } from './scan.js';
 import { compareScans, exceedsThreshold, parseRedirectMap, FINDING_TYPES } from './core/compare.js';
+import { healthScore } from './core/diagnose.js';
 import { buildReport } from './report/build.js';
 import { serve } from './server.js';
 import { runInventory } from './inventory.js';
@@ -26,7 +27,8 @@ Uso:
   sitescanner report  [--site <id>] [--out report/]
   sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
   sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
-  sitescanner export  --site <id> --base <x> --head <y> --out bundle/
+  sitescanner export  --site <id> --base <x> [--head <y>] --out bundle/
+  sitescanner pdf     --site <id> --base <x> [--head <y>] [--out file.pdf] [--redirect-map f.csv]
   sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
 
 Riferimenti a una scan (--scan, --base, --head): id completo, prefisso univoco, label, "latest", "latest~N".
@@ -49,6 +51,7 @@ const SPECS = {
     concurrency: { type: 'string' }, json: { type: 'string' }, quiet: { type: 'boolean', short: 'q' },
   },
   export: { site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, out: { type: 'string' } },
+  pdf: { site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, out: { type: 'string' }, 'redirect-map': { type: 'string' } },
   compare: {
     site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, 'redirect-map': { type: 'string' },
     'fail-on': { type: 'string' }, json: { type: 'string' }, visual: { type: 'boolean' }, limit: { type: 'string' },
@@ -105,7 +108,7 @@ async function cmdScan(o) {
   const log = o.quiet ? () => {} : (m) => console.log(dim(m));
   const summarize = (s) => {
     const st = s.stats;
-    return `${s.site} ${bold(s.id)}: ${st.pages} pagine, ${red(st.issues.error + ' E')} ${yellow(st.issues.warn + ' W')} ${blue(st.issues.info + ' I')}` +
+    return `${s.site} ${bold(s.id)}: ${st.pages} pagine, health ${bold(st.healthScore ?? '-')}, ${red(st.issues.error + ' E')} ${yellow(st.issues.warn + ' W')} ${blue(st.issues.info + ' I')}` +
       `${s.options.screenshots ? `, ${st.screenshots} screenshot` : ''}${s.crawl.truncated ? dim(` (troncata a ${s.options.maxPages} pagine)`) : ''}`;
   };
 
@@ -158,10 +161,10 @@ function cmdList(o) {
     console.log(bold(`\n${site}`) + dim(` (${scans.length} scan)`));
     if (!scans.length) continue;
     any = true;
-    console.log(dim(`  ${pad('ID', 24)} ${pad('LABEL', 18)} ${pad('ENV', 8)} ${pad('DATA', 16)} ${pad('PAGINE', 7)} ISSUE (E/W/I)`));
+    console.log(dim(`  ${pad('ID', 24)} ${pad('LABEL', 18)} ${pad('ENV', 8)} ${pad('DATA', 16)} ${pad('PAGINE', 7)} ${pad('HEALTH', 7)} ISSUE (E/W/I)`));
     for (const s of [...scans].reverse()) {
       const i = s.stats.issues;
-      console.log(`  ${pad(s.id, 24)} ${pad(s.label || '-', 18)} ${pad(s.env, 8)} ${pad(fmtDate(s.startedAt), 16)} ${pad(s.stats.pages, 7)} ${red(i.error)}/${yellow(i.warn)}/${blue(i.info)}${s.note ? dim('  ' + s.note) : ''}`);
+      console.log(`  ${pad(s.id, 24)} ${pad(s.label || '-', 18)} ${pad(s.env, 8)} ${pad(fmtDate(s.startedAt), 16)} ${pad(s.stats.pages, 7)} ${pad(s.stats.healthScore ?? '-', 7)} ${red(i.error)}/${yellow(i.warn)}/${blue(i.info)}${s.note ? dim('  ' + s.note) : ''}`);
     }
   }
   if (!any && !sites.length) console.log('Nessun sito configurato. Esegui: sitescanner init');
@@ -242,17 +245,36 @@ async function cmdInventory(o) {
 }
 
 function cmdExport(o) {
-  need(o, 'site', 'base', 'head', 'out');
+  need(o, 'site', 'base', 'out');
   const base = resolveScanRef(o.site, o.base);
-  const head = resolveScanRef(o.site, o.head);
+  // without --head the bundle opens on the diagnostic view of Base
+  const head = o.head ? resolveScanRef(o.site, o.head) : null;
   const out = path.resolve(o.out);
   if (fs.existsSync(out) && fs.readdirSync(out).length && !fs.existsSync(path.join(out, 'index.html'))) {
     throw new UserError(`${out} esiste e non sembra un bundle sitescanner: scegli una cartella vuota`);
   }
   fs.rmSync(path.join(out, 'data'), { recursive: true, force: true });
   fs.rmSync(path.join(out, 'assets'), { recursive: true, force: true });
-  const r = buildReport({ outDir: out, sites: [o.site], onlyScans: { [o.site]: [...new Set([base, head])] }, copyAssets: true, preselect: { site: o.site, base, head } });
-  console.log(`Bundle creato in ${r.outDir} (Base ${base}, Head ${head}). Apri index.html o condividi la cartella.`);
+  const r = buildReport({ outDir: out, sites: [o.site], onlyScans: { [o.site]: [...new Set([base, head].filter(Boolean))] }, copyAssets: true, preselect: { site: o.site, base, head } });
+  console.log(`Bundle creato in ${r.outDir} (Base ${base}${head ? `, Head ${head}` : ', diagnostica'}). Apri index.html o condividi la cartella.`);
+  return 0;
+}
+
+function readRedirectMap(file) {
+  if (!file) return {};
+  const f = path.resolve(file);
+  if (!fs.existsSync(f)) throw new UserError(`Redirect map non trovata: ${f}`);
+  return parseRedirectMap(fs.readFileSync(f, 'utf8'));
+}
+
+async function cmdPdf(o) {
+  need(o, 'site', 'base');
+  const { renderPdf } = await import('./pdf.js');
+  const r = await renderPdf({ site: o.site, base: o.base, head: o.head || null, redirectMap: readRedirectMap(o['redirect-map']) });
+  const out = path.resolve(o.out || r.fileName);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, r.buffer);
+  console.log(`PDF ${r.headId ? `di confronto (Base ${r.baseId}, Head ${r.headId})` : `di diagnostica (${r.baseId})`}: ${out}`);
   return 0;
 }
 
@@ -266,12 +288,7 @@ async function cmdCompare(o) {
   let cfgCompare = { ignore: [], thresholds: {} };
   try { cfgCompare = loadSite(o.site).compare; } catch { /* config removed: defaults */ }
 
-  let redirectMap = {};
-  if (o['redirect-map']) {
-    const f = path.resolve(o['redirect-map']);
-    if (!fs.existsSync(f)) throw new UserError(`Redirect map non trovata: ${f}`);
-    redirectMap = parseRedirectMap(fs.readFileSync(f, 'utf8'));
-  }
+  const redirectMap = readRedirectMap(o['redirect-map']);
   const opts = { redirectMap, ignore: cfgCompare.ignore, thresholds: cfgCompare.thresholds };
   let result = compareScans(base, head, opts);
   if (o.visual) {
@@ -288,6 +305,7 @@ async function cmdCompare(o) {
   const s = result.summary;
   const tag = (x) => `${x.id}${x.label ? ` «${x.label}»` : ''} [${x.env}]`;
   console.log(`${bold('Confronto')} ${o.site}\n  Base ${tag(result.base)}  ${dim(fmtDate(result.base.startedAt))}\n  Head ${tag(result.head)}  ${dim(fmtDate(result.head.startedAt))}`);
+  console.log(`Health score ${healthScore(base) ?? '-'} → ${healthScore(head) ?? '-'}`);
   console.log(`Pagine ${result.base.pages} → ${result.head.pages} · cambiate ${s.changed} · aggiunte ${s.added} · rimosse ${s.removed} · invariate ${s.unchanged}`);
   console.log(`Differenze: ${red(s.error + ' error')} · ${yellow(s.warn + ' warn')} · ${blue(s.info + ' info')}\n`);
 
@@ -303,7 +321,7 @@ async function cmdCompare(o) {
   if (infos.length) console.log(dim(`  info: ${infos.map(([t, n]) => `${FINDING_TYPES[t] || t} ${n}`).join(' · ')}`));
 
   if (o.json) {
-    const out = { site: o.site, generatedAt: new Date().toISOString(), tool: TOOL, failOn: o['fail-on'] || null, passed: !failed, redirectMapEntries: Object.keys(redirectMap).length, ...result };
+    const out = { site: o.site, generatedAt: new Date().toISOString(), tool: TOOL, failOn: o['fail-on'] || null, passed: !failed, redirectMapEntries: Object.keys(redirectMap).length, ...result, healthScore: { base: healthScore(base), head: healthScore(head) } };
     fs.mkdirSync(path.dirname(path.resolve(o.json)), { recursive: true });
     fs.writeFileSync(o.json, JSON.stringify(out, null, 2));
     console.log(dim(`\nRisultato JSON: ${path.resolve(o.json)}`));
@@ -312,7 +330,7 @@ async function cmdCompare(o) {
   return failed ? 1 : 0;
 }
 
-const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, ui: cmdUi, inventory: cmdInventory, export: cmdExport, compare: cmdCompare };
+const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, ui: cmdUi, inventory: cmdInventory, export: cmdExport, pdf: cmdPdf, compare: cmdCompare };
 const ALIASES = { serve: 'ui' };
 
 export async function main(argv) {

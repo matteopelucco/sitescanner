@@ -9,6 +9,11 @@ export async function loadPlaywright() {
   }
 }
 
+// SITESCANNER_CHROMIUM points to a Chromium/Chrome executable to use instead of Playwright's own.
+export function launchChromium(pw) {
+  return pw.chromium.launch({ executablePath: process.env.SITESCANNER_CHROMIUM || undefined });
+}
+
 /**
  * Captures screenshots of the HTML pages that answered 2xx. Sets page.screenshot to a path relative to the scan dir.
  * Failures are recorded per page (page.screenshotError) and never abort the scan.
@@ -21,7 +26,7 @@ export async function captureScreenshots(pages, env, opts, outDir, log = () => {
   }
   let browser;
   try {
-    browser = await pw.chromium.launch();
+    browser = await launchChromium(pw);
   } catch (e) {
     log(`Impossibile avviare Chromium (${e.message.split('\n')[0]}): screenshot saltati. Prova: npx playwright install chromium`);
     return { skipped: 'browser-launch-failed' };

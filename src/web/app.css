@@ -165,3 +165,12 @@ tr.click:hover td { background: var(--panel-2); }
 
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 13px; max-width: calc(100vw - 32px); }
 .toast.error { background: var(--error); color: #fff; }
+
+.dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text); padding: 18px 20px; width: min(520px, calc(100vw - 32px)); }
+.dialog::backdrop { background: rgba(0,0,0,.4); }
+.dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.dialog .choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; cursor: pointer; }
+.dialog .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.dialog .choice input { margin-top: 3px; }
+.dialog .choice small { display: block; color: var(--muted); margin-top: 2px; }
+.dialog .row.end { justify-content: flex-end; margin-top: 14px; }

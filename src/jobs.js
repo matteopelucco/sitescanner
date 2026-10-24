@@ -82,6 +82,11 @@ const positive = (v, name) => {
  * scan:      { type: 'scan', site, env, label?, note?, noScreenshots?, maxPages? }
  * inventory: { type: 'inventory', url } or { type: 'inventory', site, env }, plus maxPages?, maxDepth?, concurrency?
  */
+/** The job running on a site (scan or inventory), if any. */
+export function siteJob(site) {
+  return [...jobs.values()].find((j) => j.status === 'running' && j.lock === `site:${site}`) || null;
+}
+
 export function startJob(params) {
   const p = params || {};
   let run, lock, title;

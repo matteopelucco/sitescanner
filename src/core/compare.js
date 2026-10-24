@@ -21,6 +21,8 @@ export const FINDING_TYPES = {
   'content-changed': 'Contenuto testuale cambiato',
   'links-changed': 'Link interni cambiati',
   'perf-regression': 'Tempo di risposta peggiorato',
+  'indexability-changed': 'Indicizzabilità cambiata',
+  'structured-data-changed': 'Dati strutturati cambiati',
   'issue-new': 'Nuova issue',
   'issue-resolved': 'Issue risolta',
   'visual-changed': 'Differenza visiva',
@@ -51,6 +53,28 @@ function isOk(p) {
 
 function hasNoindex(p) {
   return /noindex/i.test((p && p.robots) || '');
+}
+
+// Rules a scan ran, from `options.issueCodes`; a scan that does not record them counts as having run all of them.
+const checkedCodes = (scan) => {
+  const c = scan.options && scan.options.issueCodes;
+  return { has: (code) => !c || c.includes(code) };
+};
+
+/**
+ * Why a page cannot be indexed, or null if it can. Works on scans of any version
+ * (fields missing in older scans are simply not considered).
+ */
+export function indexabilityOf(p) {
+  if (!p) return null;
+  if (p.error) return 'non raggiungibile';
+  if ((p.redirects && p.redirects.length) || (p.status >= 300 && p.status < 400)) return 'redirect';
+  if (p.status >= 400) return `status ${p.status}`;
+  if (!p.isHtml) return 'non HTML';
+  if (/\b(noindex|none)\b/i.test(p.robots || '')) return 'noindex';
+  if (/\b(noindex|none)\b/i.test(p.xRobots || '')) return 'X-Robots-Tag noindex';
+  if (p.canonicalKey && p.canonicalKey !== p.key) return 'canonicalizzata';
+  return null;
 }
 
 // Accepts a CSV with "from,to" rows (header optional). Values may be absolute URLs or paths.
@@ -131,6 +155,12 @@ export function compareScans(base, head, opts = {}) {
   const add = (f) => {
     if (!ignore.has(f.type)) findings.push(f);
   };
+  // A rule that Base did not run (older version, or disabled) cannot reveal a regression:
+  // its issues in Head are reported as info. A rule Head did not run resolves nothing.
+  const baseChecks = checkedCodes(base), headChecks = checkedCodes(head);
+  const newIssue = (code, i) => (baseChecks.has(code)
+    ? { type: 'issue-new', severity: i.severity, code, message: `${code}: ${i.message}` }
+    : { type: 'issue-new', severity: 'info', code, message: `${code}: ${i.message} (regola non attiva in Base)` });
 
   const bPages = new Map((base.pages || []).map((p) => [p.key, p]));
   const hPages = new Map((head.pages || []).map((p) => [p.key, p]));
@@ -243,6 +273,21 @@ export function compareScans(base, head, opts = {}) {
         const sev = bl.size && lost.length / bl.size > 0.2 ? 'warn' : 'info';
         add({ ...ctx, type: 'links-changed', severity: sev, message: `−${lost.length} / +${gained.length} link interni`, base: lost.slice(0, 50), head: gained.slice(0, 50) });
       }
+      // A new noindex is already an error of robots-changed: report the other causes here.
+      const bx = indexabilityOf(b), hx = indexabilityOf(h);
+      if (!bx && hx && hx !== 'noindex') {
+        add({ ...ctx, type: 'indexability-changed', severity: 'error', message: `Indicizzabile → non indicizzabile (${hx})`, base: null, head: hx });
+      } else if (bx && !hx) {
+        add({ ...ctx, type: 'indexability-changed', severity: 'info', message: `Non indicizzabile (${bx}) → indicizzabile`, base: bx, head: null });
+      }
+      // Only scans that extracted structured data can be compared (older scans have no field).
+      if (b.structuredData && h.structuredData) {
+        const bt = b.structuredData.types || [], ht = h.structuredData.types || [];
+        const lostT = bt.filter((x) => !ht.includes(x)), gainedT = ht.filter((x) => !bt.includes(x));
+        if (lostT.length || gainedT.length) {
+          add({ ...ctx, type: 'structured-data-changed', severity: lostT.length ? 'warn' : 'info', message: [lostT.length ? `rimossi ${lostT.join(', ')}` : '', gainedT.length ? `aggiunti ${gainedT.join(', ')}` : ''].filter(Boolean).join(' · '), base: bt, head: ht });
+        }
+      }
       const bm = b.responseMs || 0, hm = h.responseMs || 0;
       if (bm && hm >= t.perfMinMs && hm > bm * t.perfFactor && hm - bm > t.perfMinDeltaMs) {
         add({ ...ctx, type: 'perf-regression', severity: 'warn', message: `${bm} ms → ${hm} ms`, base: bm, head: hm });
@@ -252,10 +297,10 @@ export function compareScans(base, head, opts = {}) {
     // Page-level issues
     const bi = issueSet(b), hi = issueSet(h);
     for (const [code, i] of hi) {
-      if (!bi.has(code)) add({ ...ctx, type: 'issue-new', severity: i.severity, code, message: `${code}: ${i.message}` });
+      if (!bi.has(code)) add({ ...ctx, ...newIssue(code, i) });
     }
     for (const [code, i] of bi) {
-      if (!hi.has(code)) add({ ...ctx, type: 'issue-resolved', severity: 'info', code, message: `${code}: ${i.message}` });
+      if (!hi.has(code) && headChecks.has(code)) add({ ...ctx, type: 'issue-resolved', severity: 'info', code, message: `${code}: ${i.message}` });
     }
 
     const v = visual[key];
@@ -273,8 +318,8 @@ export function compareScans(base, head, opts = {}) {
   const siteIssueId = (i) => i.id || i.code + '|' + (i.key || '');
   const bs = new Map((base.issues || []).map((i) => [siteIssueId(i), i]));
   const hs = new Map((head.issues || []).map((i) => [siteIssueId(i), i]));
-  for (const [k, i] of hs) if (!bs.has(k)) add({ type: 'issue-new', severity: i.severity, key: i.key || '(sito)', code: i.code, message: `${i.code}: ${i.message}` });
-  for (const [k, i] of bs) if (!hs.has(k)) add({ type: 'issue-resolved', severity: 'info', key: i.key || '(sito)', code: i.code, message: `${i.code}: ${i.message}` });
+  for (const [k, i] of hs) if (!bs.has(k)) add({ key: i.key || '(sito)', ...newIssue(i.code, i) });
+  for (const [k, i] of bs) if (!hs.has(k) && headChecks.has(i.code)) add({ type: 'issue-resolved', severity: 'info', key: i.key || '(sito)', code: i.code, message: `${i.code}: ${i.message}` });
 
   findings.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || String(a.key).localeCompare(String(b.key)) || a.type.localeCompare(b.type));
 

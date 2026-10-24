@@ -106,6 +106,31 @@ test('scan, history, compare, report, export', async () => {
   assert.match(bundleIndex, /"preselect":\{"site":"demo"/);
   assert.equal(fs.readdirSync(path.join(home, 'bundle', 'data', 'demo')).filter((f) => !f.endsWith('.text.js')).length, 2);
   assert.ok(!bundleIndex.includes('"broken"'));
+
+  // Without --head the bundle opens on the diagnostic view of Base alone
+  r = await run('export', '--site', 'demo', '--base', 'v1', '--out', 'diag');
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /diagnostica/);
+  const diagIndex = fs.readFileSync(path.join(home, 'diag', 'data', 'index.js'), 'utf8');
+  assert.match(diagIndex, /"preselect":\{"site":"demo","base":"[^"]+","head":null\}/);
+  assert.equal(fs.readdirSync(path.join(home, 'diag', 'data', 'demo')).filter((f) => !f.endsWith('.text.js')).length, 1);
+  const diagHtml = fs.readFileSync(path.join(home, 'diag', 'index.html'), 'utf8');
+  assert.match(diagHtml, /function diagnoseScan/);
+  assert.match(diagHtml, /function renderPrintHtml/);
+  assert.doesNotMatch(diagHtml, /^import /m);
+
+  // PDF: needs Playwright's Chromium (or SITESCANNER_CHROMIUM); without it, a clear usage error
+  for (const [args, file] of [[['--base', 'v1'], 'diag.pdf'], [['--base', 'v1', '--head', 'latest'], 'cmp.pdf']]) {
+    r = await run('pdf', '--site', 'demo', ...args, '--out', file);
+    if (r.code === 0) {
+      const pdf = fs.readFileSync(path.join(home, file));
+      assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+      assert.ok(pdf.length > 5000);
+    } else {
+      assert.equal(r.code, 2, r.out);
+      assert.match(r.out, /Playwright|Chromium/);
+    }
+  }
 });
 
 test('usage errors exit with code 2', async () => {
@@ -113,4 +138,5 @@ test('usage errors exit with code 2', async () => {
   assert.equal((await run('scan', '--site', 'nope', '--env', 'local')).code, 2);
   assert.equal((await run('compare', '--site', 'demo', '--base', 'zzz', '--head', 'latest')).code, 2);
   assert.equal((await run('bogus')).code, 2);
+  assert.equal((await run('pdf', '--site', 'demo')).code, 2, 'pdf needs --base');
 });

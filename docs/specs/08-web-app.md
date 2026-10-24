@@ -12,7 +12,7 @@
 | RF-WEB-04 | L'editor di un sito ha due modalità: **form** (nome, ambienti con base URL e basic auth, opzioni di crawling, screenshot, `compare.ignore`) e **YAML** (file completo). |
 | RF-WEB-05 | Il form modifica solo le chiavi che gestisce e DEVE conservare commenti e chiavi non gestite (es. `headers`, `compare.thresholds`). Un campo numerico svuotato rimuove la chiave (torna al default). Una chiave assente dal file e lasciata al default non viene aggiunta. *(test/web.test.js)* |
 | RF-WEB-06 | Ogni salvataggio è validato come in [§2](02-configurazione.md) prima di essere scritto. Un file non valido non viene scritto e l'errore è mostrato. La scrittura è atomica. *(test/web.test.js)* |
-| RF-WEB-07 | «Elimina configurazione» rimuove solo `sites/<id>.yml`, previa conferma; lo storico in `data/` resta e il sito resta visibile come «solo storico». *(test/web.test.js)* |
+| RF-WEB-07 | «Elimina sito…» chiede esplicitamente cosa fare dello storico, indicando il numero di scan: **tieni** (rimuove solo `sites/<id>.yml`; il sito resta visibile come «solo storico») o **cancella** (rimuove anche `data/<id>/`, file di sola lettura compresi: scan, screenshot, testo, label; il report viene rigenerato e il sito sparisce da web app e report). Con più scelte nessuna è preselezionata e la conferma resta disabilitata finché non si sceglie. Un sito «solo storico» ha «Elimina storico…», che può solo cancellare lo storico. Se c'è un job in corso sul sito l'eliminazione è rifiutata. *(test/web.test.js)* |
 
 ## 8.2 Scan e storico
 
@@ -21,7 +21,7 @@
 | RF-WEB-10 | Dalla pagina del sito si avvia una scan scegliendo ambiente, label, nota, limite di pagine e l'opzione «senza screenshot». Il comportamento è quello di [§4](04-scansione.md). |
 | RF-WEB-11 | Lo storico elenca le scan dalla più recente con data, id, ambiente, label, nota, URL, errori, warning e tempo di risposta medio. Si aggiorna da solo al termine di una scan. |
 | RF-WEB-12 | Label e nota di una scan si modificano in linea, con le regole di [§5.3](05-storico-e-dati.md#53-label-e-note) (l'istantanea non cambia). *(test/web.test.js)* |
-| RF-WEB-13 | Ogni scan ha un link al report con quella scan come Head e la precedente dello stesso ambiente come Base. |
+| RF-WEB-13 | Ogni scan ha un link alla sua diagnostica nel report (sola Base, [§7.7](07-report.md#77-vista-diagnostica-di-una-singola-scan)) e, se esiste una scan precedente dello stesso ambiente, un link al confronto con quella scan come Head e la precedente come Base. Il link «PDF» scarica il report di qualità della scan in PDF; un errore (es. Playwright assente) è mostrato come notifica. |
 
 ## 8.3 Job
 
@@ -42,11 +42,12 @@ L'API JSON su `/api/` è a uso della web app e non è un'interfaccia stabile.
 | Metodo e path | Funzione |
 |---|---|
 | `GET /api/state` | Siti, job, default della configurazione, YAML d'esempio |
-| `GET/POST /api/sites`, `GET/PUT/DELETE /api/sites/<id>` | Elenco, creazione (`{id, form}` o `{id, raw}`), dettaglio con storico, modifica, eliminazione |
+| `GET/POST /api/sites`, `GET/PUT/DELETE /api/sites/<id>` | Elenco, creazione (`{id, form}` o `{id, raw}`), dettaglio con storico, modifica, eliminazione: `DELETE …?history=keep` (default) o `history=delete`; risponde `{ok, configDeleted, scansDeleted}`; 409 con un job in corso sul sito, 400 per `keep` su un sito senza configurazione |
 | `PUT /api/sites/<id>/scans/<ref>` | Label e nota di una scan |
 | `GET/POST /api/jobs`, `GET /api/jobs/<id>`, `POST /api/jobs/<id>/cancel` | Job |
 | `GET /api/events` | Stream SSE: `jobs` (stato completo alla connessione), `job` (ogni cambiamento) |
 | `GET /api/inventories`, `GET/DELETE /api/inventories/<id>`, `GET /api/inventories/<id>.csv` | Inventari |
+| `GET /api/pdf?site=<id>&base=<ref>[&head=<ref>]` | PDF del report di qualità (senza `head`) o di regressione ([§7.8](07-report.md#78-export-pdf)), come allegato; 400 se l'id del sito non è valido, manca `base` o Playwright non è disponibile *(test/web.test.js)* |
 
 | ID | Requisito |
 |---|---|

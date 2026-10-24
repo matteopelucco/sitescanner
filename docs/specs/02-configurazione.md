@@ -37,6 +37,10 @@ screenshots:
   hide: [".cookie-banner"]
 compare:
   ignore: [perf-regression]
+quality:
+  disable: [anchor-generic]
+  severity: { thin-content: warn }
+  thinWords: 150
 ```
 
 ## 2.3 Opzioni
@@ -71,3 +75,6 @@ compare:
 | `screenshots.hide` | `[]` | Selettori CSS resi invisibili prima dello scatto (banner cookie, contenuti variabili). |
 | `compare.ignore` | `[]` | Tipi di differenza da non riportare (vedi [§6.4](06-confronto.md#64-tipi-di-differenza)). |
 | `compare.thresholds` | vedi §6.5 | Soglie del confronto. |
+| `quality.disable` | `[]` | Codici di issue di qualità da non calcolare (vedi [§4.4](04-scansione.md#44-issue-di-qualità)). |
+| `quality.severity` | `{}` | Severità diversa da quella predefinita per singoli codici (`error`, `warn`, `info`). |
+| `quality.<soglia>` | vedi §4.4 | `slowMs` (2000), `titleMin`/`titleMax` (30/65), `descriptionMin`/`descriptionMax` (70/170), `thinWords` (200), `maxClickDepth` (3), `maxDomNodes` (1500), `maxUrlLength` (115). |

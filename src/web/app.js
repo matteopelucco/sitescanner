@@ -208,7 +208,7 @@ async function viewSite(id, tab = 'scans') {
     <div class="head"><div><h1>${esc(d.name)}</h1><div class="sub mono">sites/${esc(d.id)}.yml${d.configured ? '' : ' — non configurato (solo storico)'}</div></div>
       <div class="row">${d.scans ? `<a class="btn" href="${esc(reportUrl(d.id))}" target="_blank" rel="noopener">Report ↗</a>` : ''}
       <a class="btn" href="#/inventory?site=${encodeURIComponent(d.id)}">Inventario</a>
-      ${d.configured ? '<button class="btn danger" id="delSite">Elimina configurazione</button>' : ''}</div></div>
+      ${d.configured ? '<button class="btn danger" id="delSite">Elimina sito…</button>' : d.scans ? '<button class="btn danger" id="delSite">Elimina storico…</button>' : ''}</div></div>
     ${d.error ? `<div class="notice error">Configurazione non valida: ${esc(d.error)}</div>` : ''}
     <div class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div id="tabBody"></div>`;
@@ -217,14 +217,62 @@ async function viewSite(id, tab = 'scans') {
   else renderScansTab(body, d);
   for (const b of $$('[data-tab]')) b.onclick = () => { location.hash = `#/site/${encodeURIComponent(id)}${b.dataset.tab === 'scans' ? '' : `/${b.dataset.tab}`}`; };
   const del = $('#delSite');
-  if (del) del.onclick = async () => {
-    if (!confirm(`Eliminare la configurazione di "${d.id}"? Lo storico delle scan in data/ resta e rimane visibile nel report.`)) return;
-    try {
-      await api('DELETE', `sites/${encodeURIComponent(d.id)}`);
-      toast('Configurazione eliminata');
-      location.hash = '#/';
-    } catch (e) { toast(e.message, true); }
-  };
+  if (del) del.onclick = () => deleteSiteDialog(d);
+}
+
+// Deleting a site asks explicitly what to do with its history (RF-WEB-07).
+async function deleteSiteDialog(d) {
+  const n = d.scans;
+  const scans = `${n} scan`;
+  let choices;
+  if (!d.configured) {
+    choices = [{ value: 'delete', label: `Cancella lo storico (${scans})`, desc: 'Scan, screenshot, testo e label vengono eliminati definitivamente e il sito sparisce da web app e report.' }];
+  } else if (n) {
+    choices = [
+      { value: 'keep', label: `Tieni lo storico (${scans})`, desc: 'Viene eliminato solo sites/' + d.id + '.yml; il sito resta consultabile come «solo storico».' },
+      { value: 'delete', label: `Cancella anche lo storico (${scans})`, desc: 'Scan, screenshot, testo e label vengono eliminati definitivamente e il sito sparisce da web app e report.' },
+    ];
+  } else {
+    choices = [{ value: 'keep', label: 'Elimina la configurazione', desc: 'Il sito non ha scan salvate.' }];
+  }
+  const history = await choiceDialog({
+    title: d.configured ? `Eliminare il sito «${d.name}»?` : `Eliminare lo storico di «${d.name}»?`,
+    choices,
+    confirm: 'Elimina',
+  });
+  if (!history) return;
+  try {
+    const r = await api('DELETE', `sites/${encodeURIComponent(d.id)}?history=${history}`);
+    toast(r.scansDeleted ? `Sito eliminato con ${r.scansDeleted} scan` : r.configDeleted ? 'Configurazione eliminata, storico conservato' : 'Sito eliminato');
+    location.hash = '#/';
+  } catch (e) { toast(e.message, true); }
+}
+
+/**
+ * Modal with mutually exclusive choices; resolves with the chosen value or null if cancelled.
+ * With more than one choice nothing is preselected: confirming requires an explicit choice.
+ */
+function choiceDialog({ title, choices, confirm }) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'dialog';
+    const one = choices.length === 1;
+    dlg.innerHTML = `<form method="dialog">
+      <h2>${esc(title)}</h2>
+      ${choices.map((c) => `<label class="choice"><input type="radio" name="c" value="${esc(c.value)}"${one ? ' checked' : ''}><span><b>${esc(c.label)}</b><small>${esc(c.desc)}</small></span></label>`).join('')}
+      <div class="row end"><button type="button" class="btn" data-x>Annulla</button><button class="btn danger" value="ok"${one ? '' : ' disabled'}>${esc(confirm)}</button></div>
+    </form>`;
+    document.body.appendChild(dlg);
+    const ok = dlg.querySelector('[value="ok"]');
+    dlg.addEventListener('change', () => { ok.disabled = !dlg.querySelector('input:checked'); });
+    dlg.querySelector('[data-x]').onclick = () => dlg.close('');
+    dlg.addEventListener('close', () => {
+      const v = dlg.returnValue === 'ok' ? dlg.querySelector('input:checked')?.value || null : null;
+      dlg.remove();
+      resolve(v);
+    });
+    dlg.showModal();
+  });
 }
 
 function renderScansTab(body, d) {
@@ -268,19 +316,42 @@ function historyTable(d) {
       <td><span class="tag">${esc(s.env)}</span></td>
       <td class="lbl">${s.label ? `<span class="tag label">${esc(s.label)}</span>` : ''}${s.note ? `<div class="muted small">${esc(s.note)}</div>` : ''}</td>
       <td class="num">${fmtNum(st.pages)}</td>
+      <td class="num">${st.healthScore ?? '—'}</td>
       <td class="num sev-e">${fmtNum(st.issues?.error)}</td>
       <td class="num sev-w">${fmtNum(st.issues?.warn)}</td>
       <td class="num">${st.avgResponseMs == null ? '—' : `${fmtNum(st.avgResponseMs)} ms`}</td>
       <td><div class="row">
+        <a class="btn small" href="${esc(reportUrl(d.id, s.id))}" target="_blank" rel="noopener" title="Issue e pagine della sola scan">Diagnostica ↗</a>
+        <a class="btn small" href="/api/pdf?${esc(new URLSearchParams({ site: d.id, base: s.id }).toString())}" data-pdf title="Report di qualità della scan in PDF (richiede Playwright)">PDF</a>
         ${prev ? `<a class="btn small" href="${esc(reportUrl(d.id, prev.id, s.id))}" target="_blank" rel="noopener" title="Base: ${esc(fmtDate(prev.startedAt))}">Confronta con la precedente ↗</a>` : ''}
         <button class="btn small" data-edit-label>Label</button>
       </div></td>
     </tr>`;
   }).join('');
   return `<div class="tablewrap"><table>
-    <thead><tr><th>Data</th><th>Ambiente</th><th>Label / nota</th><th class="num">URL</th><th class="num">Errori</th><th class="num">Warning</th><th class="num">Risposta media</th><th></th></tr></thead>
+    <thead><tr><th>Data</th><th>Ambiente</th><th>Label / nota</th><th class="num">URL</th><th class="num" title="Quota di pagine senza errori">Health</th><th class="num">Errori</th><th class="num">Warning</th><th class="num">Risposta media</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
+
+// PDF links: download through fetch so that a server error is shown as a toast, not saved as a file.
+document.addEventListener('click', async (e) => {
+  const a = e.target.closest('a[data-pdf]');
+  if (!a) return;
+  e.preventDefault();
+  toast('Generazione del PDF…');
+  try {
+    const res = await fetch(a.getAttribute('href'));
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(await res.blob());
+    link.download = (/filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '') || [])[1] || 'sitescanner.pdf';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    toast('PDF scaricato');
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
 
 // Inline label editor in the history table (event delegation: the table is re-rendered after scans).
 document.addEventListener('click', async (e) => {
@@ -360,6 +431,9 @@ function siteForm(c, defs, isNew) {
     <fieldset class="fs"><legend>Confronto</legend><div class="fields">
       ${area('ignore', 'Tipi di differenza da ignorare', c.compare?.ignore, 'es. <code>content-changed</code>, <code>perf-regression</code>. Le soglie si modificano nel YAML.', 'cmp.ignore')}
     </div></fieldset>
+    <fieldset class="fs"><legend>Issue di qualità</legend><div class="fields">
+      ${area('qdisable', 'Issue da non calcolare', c.quality?.disable, 'Codici, uno per riga, es. <code>anchor-generic</code>, <code>url-underscore</code>. Severità e soglie si modificano nel YAML (<code>quality</code>).', 'q.disable')}
+    </div></fieldset>
     <div class="formerr" id="formErr"></div>
     <div class="formbar"><button class="btn primary" type="submit">${isNew ? 'Crea sito' : 'Salva'}</button><span class="muted small">Commenti e chiavi non gestite dal form restano invariati nel file.</span></div>
   </form>`;
@@ -383,6 +457,7 @@ function collectForm(f) {
       waitMs: intOrNull(val('sh.waitMs')), concurrency: intOrNull(val('sh.concurrency')), hide: lines(v('sh.hide').value),
     },
     compare: { ignore: lines(v('cmp.ignore').value) },
+    quality: { disable: lines(v('q.disable').value) },
     envs: {},
   };
   for (const row of $$('.env', f)) {

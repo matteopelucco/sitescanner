@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
+import { QUALITY_DEFAULTS } from './analyze.js';
 
 export function rootDir() {
   return path.resolve(process.env.SITESCANNER_HOME || process.cwd());
@@ -34,6 +35,7 @@ const DEFAULTS = {
   screenshots: { enabled: true, width: 1366, height: 900, fullPage: true, maxHeight: 10000, waitMs: 300, concurrency: 2, hide: [] },
   storeText: true,
   compare: { ignore: [], thresholds: {} },
+  quality: { disable: [], severity: {} },
 };
 
 // Replaces ${VAR} with environment values so credentials stay out of the YAML.
@@ -83,6 +85,7 @@ export function parseSite(id, raw, where = `${id}.yml`) {
     ...doc,
     screenshots: { ...DEFAULTS.screenshots, ...(doc.screenshots || {}) },
     compare: { ...DEFAULTS.compare, ...(doc.compare || {}) },
+    quality: { ...DEFAULTS.quality, ...(doc.quality || {}) },
   };
   cfg.id = id;
   cfg.name = doc.name || id;
@@ -99,8 +102,21 @@ export function parseSite(id, raw, where = `${id}.yml`) {
       try { new RegExp(r); } catch (e) { throw new UserError(`${where}: regex non valida in "${field}": ${r} (${e.message})`); }
     }
   }
+  validateQuality(cfg.quality, where);
   cfg.configHash = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
   return cfg;
+}
+
+function validateQuality(q, where) {
+  if (typeof q !== 'object' || Array.isArray(q)) throw new UserError(`${where}: "quality" deve essere un oggetto`);
+  if (!Array.isArray(q.disable)) throw new UserError(`${where}: quality.disable deve essere un elenco di codici di issue`);
+  if (typeof q.severity !== 'object' || Array.isArray(q.severity)) throw new UserError(`${where}: quality.severity deve essere un oggetto codice: severità`);
+  for (const [code, sev] of Object.entries(q.severity)) {
+    if (!['error', 'warn', 'info'].includes(sev)) throw new UserError(`${where}: quality.severity.${code} deve essere error, warn o info`);
+  }
+  for (const k of Object.keys(QUALITY_DEFAULTS)) {
+    if (q[k] != null && !(Number(q[k]) >= 0)) throw new UserError(`${where}: quality.${k} deve essere un numero ≥ 0`);
+  }
 }
 
 /** Configuration for a site that is not configured: defaults, one env, no screenshots. */
@@ -165,6 +181,7 @@ export function applySiteForm(raw, form) {
   for (const k of scalar) if (k in form) put([k], form[k]);
   if (form.screenshots) for (const [k, v] of Object.entries(form.screenshots)) put(['screenshots', k], v);
   if (form.compare && 'ignore' in form.compare) put(['compare', 'ignore'], form.compare.ignore);
+  if (form.quality && 'disable' in form.quality) put(['quality', 'disable'], form.quality.disable);
   if (form.envs) {
     const names = Object.keys(form.envs);
     const cur = doc.get('envs');
@@ -238,4 +255,10 @@ screenshots:
 compare:
   ignore: []            # tipi di differenza da ignorare, es. [content-changed, perf-regression]
   thresholds: {}        # es. { contentWarnRatio: 0.3, visualWarn: 0.005 }
+
+quality:
+  disable: []           # issue di qualità da non calcolare, es. [anchor-generic, url-underscore]
+  severity: {}          # severità diverse dal default, es. { thin-content: warn }
+  # soglie: slowMs 2000, titleMin 30, titleMax 65, descriptionMin 70, descriptionMax 170,
+  # thinWords 200, maxClickDepth 3, maxDomNodes 1500, maxUrlLength 115
 `;

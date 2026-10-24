@@ -82,6 +82,8 @@ test('web app: static files, Host and Origin protection', async () => {
   assert.match(await index.text(), /app\.js/);
   assert.equal((await fetch(`${base}/app/app.js`)).status, 200);
   assert.equal((await fetch(`${base}/app/../config.js`)).status, 404);
+  assert.equal((await fetch(`${base}/api/pdf?site=..%2Fsites&base=x`)).status, 400, 'pdf: site id validated');
+  assert.equal((await fetch(`${base}/api/pdf?site=demo`)).status, 400, 'pdf: base required');
 
   assert.equal((await api('POST', 'sites', { id: 'x' }, { origin: 'http://evil.example' })).status, 403);
   const form = await fetch(`${base}/api/sites`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
@@ -95,16 +97,18 @@ test('web app: static files, Host and Origin protection', async () => {
 });
 
 test('web app API: create and edit a site, scan via job, label, inventory', async () => {
-  let r = await api('POST', 'sites', { id: 'demo', form: { name: 'Demo', envs: { local: { baseUrl: fixture.url } }, concurrency: 2, screenshots: { enabled: false } } });
+  let r = await api('POST', 'sites', { id: 'demo', form: { name: 'Demo', envs: { local: { baseUrl: fixture.url } }, concurrency: 2, screenshots: { enabled: false }, quality: { disable: ['anchor-generic'] } } });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.config.name, 'Demo');
   const raw = fs.readFileSync(path.join(home, 'sites', 'demo.yml'), 'utf8');
   assert.match(raw, /# Configurazione di un sito/, 'the form keeps the comments of the example');
   assert.match(raw, /enabled: false/);
+  assert.match(raw, /disable: \[ anchor-generic \]/);
   assert.doesNotMatch(raw, /envs:\s*\n\s*prod:/, 'the example env is replaced');
 
   assert.equal((await api('POST', 'sites', { id: 'demo', form: {} })).status, 400, 'no overwrite on create');
   assert.equal((await api('PUT', 'sites/demo', { raw: 'envs: {}' })).status, 400, 'invalid YAML is not written');
+  assert.equal((await api('PUT', 'sites/demo', { raw: `envs: { local: { baseUrl: ${fixture.url} } }\nquality: { severity: { h1-missing: fatal } }` })).status, 400, 'invalid quality severity');
   assert.equal((await api('GET', 'sites/nope')).status, 404);
 
   r = await api('POST', 'jobs', { type: 'scan', site: 'demo', env: 'local', label: 'v1' });
@@ -113,6 +117,10 @@ test('web app API: create and edit a site, scan via job, label, inventory', asyn
   const job = await waitJob(r.data.id);
   assert.equal(job.status, 'done', job.error || job.log.join('\n'));
   assert.ok(job.result.stats.pages >= 6);
+  const snap = JSON.parse(fs.readFileSync(path.join(home, 'data', 'demo', 'scans', job.result.scanId, 'scan.json'), 'utf8'));
+  assert.ok(!snap.options.issueCodes.includes('anchor-generic'), 'disabled rule is not recorded as checked');
+  assert.ok(snap.options.issueCodes.includes('canonical-broken'));
+  assert.equal(typeof snap.stats.healthScore, 'number');
   assert.ok(fs.existsSync(path.join(home, 'report', 'index.html')), 'report rebuilt after the scan');
 
   r = await api('GET', 'sites/demo');
@@ -133,9 +141,34 @@ test('web app API: create and edit a site, scan via job, label, inventory', asyn
   assert.match(csv.data, /^key,status,/);
   assert.equal((await api('DELETE', `inventories/${inv.result.inventoryId}`)).status, 200);
 
-  assert.equal((await api('DELETE', 'sites/demo')).status, 200);
+  // No deletion while a job runs on the site (the fixture is slowed down to keep the crawl going)
+  fixture.setDelay(300);
+  const running = await api('POST', 'jobs', { type: 'inventory', site: 'demo', env: 'local' });
+  r = await api('DELETE', 'sites/demo?history=delete');
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.match(r.data.error, /job in corso/);
+  await api('POST', `jobs/${running.data.id}/cancel`, {});
+  await waitJob(running.data.id);
+  fixture.setDelay(0);
+  assert.ok(fs.existsSync(path.join(home, 'sites', 'demo.yml')), 'nothing deleted while the job ran');
+
+  assert.equal((await api('DELETE', 'sites/demo?history=bogus')).status, 400);
+  r = await api('DELETE', 'sites/demo');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data, { ok: true, configDeleted: true, scansDeleted: 0 }, 'history kept by default');
   r = await api('GET', 'state');
   assert.deepEqual(r.data.sites.map((s) => [s.id, s.configured]), [['demo', false]], 'history stays after deleting the config');
+
+  // A history-only site can be removed only by deleting its history, read-only snapshots included
+  assert.equal((await api('DELETE', 'sites/demo?history=keep')).status, 400);
+  r = await api('DELETE', 'sites/demo?history=delete');
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.scansDeleted, 1);
+  assert.ok(!fs.existsSync(path.join(home, 'data', 'demo')));
+  assert.deepEqual((await api('GET', 'state')).data.sites, []);
+  assert.ok(!fs.existsSync(path.join(home, 'report', 'data', 'demo')), 'report rebuilt without the site');
+  assert.doesNotMatch(fs.readFileSync(path.join(home, 'report', 'data', 'index.js'), 'utf8'), /"id":"demo"/);
+  assert.equal((await api('DELETE', 'sites/demo?history=delete')).status, 404);
 });
 
 test('web app API: cancelling a job saves nothing', async () => {

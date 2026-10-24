@@ -22,7 +22,7 @@ data/<sito>/labels.json                       label e note modificate dopo la sc
 | RF-DATA-10 | Durante la scan i file vengono scritti in una cartella temporanea `.<scanId>.partial`. Solo a scan completata la cartella viene rinominata nel suo nome definitivo. |
 | RF-DATA-11 | Prima della rinomina tutti i file dell'istantanea sono resi di sola lettura. *(test e2e)* |
 | RF-DATA-12 | In caso di errore o interruzione la cartella temporanea viene eliminata; le cartelle che iniziano con `.` non sono mai considerate scan. |
-| RF-DATA-13 | Nessun comando modifica o cancella un'istantanea. |
+| RF-DATA-13 | Nessun comando modifica o cancella un'istantanea. Unica eccezione: l'eliminazione esplicita dello storico di un sito dalla web app ([§8](08-web-app.md), RF-WEB-07), che rimuove tutta la cartella `data/<sito>/` (resi prima scrivibili i file di sola lettura). |
 | RF-DATA-14 | `scan.json` contiene, oltre a pagine e issue: versione dello schema (`schema: 1`), id, sito e nome, ambiente e `baseUrl`, label e nota iniziali, date di inizio e fine, durata, nome e versione del tool, opzioni effettive (maxPages, screenshot, keepHtml, testo), hash del file di configurazione, **copia della configurazione** con credenziali e header sensibili (nomi contenenti `auth`, `cookie`, `token`, `key`) sostituiti da `***`, dati del crawling (URL da sitemap, URL non visitati, troncamento) e statistiche. |
 
 ## 5.3 Label e note

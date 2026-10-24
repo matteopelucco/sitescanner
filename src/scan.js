@@ -5,6 +5,7 @@ import { newScanId, stageScan, commitScan, discardStaging } from './store.js';
 import { crawl } from './crawler.js';
 import { captureScreenshots } from './screenshots.js';
 import { TOOL } from './version.js';
+import { healthScore } from './core/diagnose.js';
 
 // Staging dirs of scans in progress, removed if the process is interrupted.
 export const activeStaging = new Set();
@@ -30,6 +31,7 @@ function computeStats(pages, issues) {
     byStatus,
     issues: sev,
     avgResponseMs: n ? Math.round(ms / n) : null,
+    healthScore: healthScore({ pages, issues }),
     screenshots: pages.filter((p) => p.screenshot).length,
   };
 }
@@ -93,10 +95,11 @@ export async function scanSite(siteId, envName, opts = {}, log = () => {}) {
         screenshotsSkipped: shots && shots.skipped ? shots.skipped : undefined,
         keepHtml: !!opts.keepHtml,
         text: !!(cfg.storeText && result.texts.size),
+        issueCodes: result.issueCodes,
       },
       configHash: cfg.configHash,
       config: redactedConfig(cfg),
-      crawl: { sitemapUrls: result.sitemapUrls, unvisited: result.unvisited, truncated: result.unvisited > 0 },
+      crawl: { sitemapUrls: result.sitemapUrls, unvisited: result.unvisited, truncated: result.unvisited > 0, robotsFound: result.robotsFound, sitemapFound: result.sitemapFound, startKeys: result.seeds.start },
       stats: computeStats(result.pages, result.issues),
       pages: result.pages,
       issues: result.issues,

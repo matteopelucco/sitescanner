@@ -1,9 +1,11 @@
 import fs from 'node:fs';
-import { listSiteIds, loadSite, siteFile, parseSite, saveSite, deleteSite, applySiteForm, siteDefaults, rootDir, UserError, EXAMPLE_SITE } from './config.js';
-import { listDataSites, listScans, writeLabel, resolveScanRef } from './store.js';
-import { startJob, listJobs, getJob, cancelJob, jobView, onJobChange } from './jobs.js';
+import { listSiteIds, loadSite, siteFile, parseSite, saveSite, deleteSite, applySiteForm, siteDefaults, rootDir, dirs, validSiteId, UserError, EXAMPLE_SITE } from './config.js';
+import { listDataSites, listScans, writeLabel, resolveScanRef, deleteSiteData } from './store.js';
+import { startJob, listJobs, getJob, cancelJob, jobView, onJobChange, siteJob } from './jobs.js';
+import { buildReport } from './report/build.js';
 import { listInventories, loadInventory, deleteInventory, inventoryCsv, INVENTORY_DEFAULTS } from './inventory.js';
 import { TOOL } from './version.js';
+import { renderPdf } from './pdf.js';
 
 const MAX_BODY = 1024 * 1024;
 
@@ -71,6 +73,28 @@ function siteDetail(id) {
   return { ...siteSummary(id), raw, config, error, history: [...listScans(id)].reverse() };
 }
 
+/**
+ * Deletes a site: its configuration and, with history "delete", all its scans (then the report is
+ * rebuilt). A site with only history can be removed only by deleting the history.
+ */
+function removeSite(id, history) {
+  if (!validSiteId(id)) throw new UserError(`Id sito non valido: ${id}`);
+  if (!['keep', 'delete'].includes(history)) throw new UserError('history deve essere "keep" o "delete"');
+  const configured = !!siteFile(id);
+  const hasData = listDataSites().includes(id);
+  if (!configured && !hasData) throw new NotFound(`Sito "${id}" non trovato`);
+  const busy = siteJob(id);
+  if (busy) throw Object.assign(new UserError(`C'è un job in corso sul sito (${busy.title}): attendi la fine o annullalo`), { status: 409 });
+  if (!configured && history === 'keep') throw new UserError(`Il sito "${id}" non ha una configurazione: per rimuoverlo va cancellato lo storico`);
+  if (configured) deleteSite(id);
+  let scansDeleted = 0;
+  if (history === 'delete' && hasData) {
+    scansDeleted = deleteSiteData(id);
+    buildReport({ outDir: dirs.report });
+  }
+  return { ok: true, configDeleted: configured, scansDeleted };
+}
+
 function events(req, res) {
   res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
   const write = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -121,10 +145,7 @@ export async function handleApi(req, res, url) {
         saveSite(b, raw);
         return send(res, 200, siteDetail(b));
       }
-      if (m === 'DELETE') {
-        deleteSite(b);
-        return send(res, 200, { ok: true });
-      }
+      if (m === 'DELETE') return send(res, 200, removeSite(b, url.searchParams.get('history') || 'keep'));
     } else if (c === 'scans' && d && m === 'PUT') {
       const body = await readJson(req);
       const id = resolveScanRef(b, d);
@@ -138,6 +159,13 @@ export async function handleApi(req, res, url) {
     if (!b && m === 'POST') return send(res, 202, jobView(startJob(await readJson(req))));
     if (b && !c && m === 'GET') return send(res, 200, jobView(getJob(b), { withLog: true }));
     if (b && c === 'cancel' && m === 'POST') return send(res, 200, cancelJob(b));
+  }
+
+  if (a === 'pdf' && !b && m === 'GET') {
+    const q = url.searchParams;
+    const { buffer, fileName } = await renderPdf({ site: q.get('site') || '', base: q.get('base') || '', head: q.get('head') || null });
+    res.writeHead(200, { 'content-type': 'application/pdf', 'content-length': buffer.length, 'content-disposition': `attachment; filename="${fileName}"` });
+    return res.end(buffer);
   }
 
   if (a === 'inventories') {

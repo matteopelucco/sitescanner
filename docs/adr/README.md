@@ -17,3 +17,5 @@
 | 0011 | [Job in background nel processo del server, con avanzamento via Server-Sent Events](0011-job-in-background-nel-processo-del-server-con-avanzamento-vi.md) | proposed | 2026-10-23 |
 | 0012 | [Server locale della web app: solo loopback, controllo di Host e Origin, scritture solo JSON](0012-server-locale-della-web-app-solo-loopback-controllo-di-host.md) | proposed | 2026-10-23 |
 | 0013 | [Inventario del sito come crawl separato dalle scan, senza storico né confronto](0013-inventario-del-sito-come-crawl-separato-dalle-scan-senza-sto.md) | proposed | 2026-10-23 |
+| 0014 | [Catalogo delle regole di qualità registrato in ogni scan, per non scambiare regole nuove per regressioni](0014-catalogo-di-regole-di-qualita-registrato-in-ogni-scan.md) | proposed | 2026-10-24 |
+| 0015 | [PDF da un documento di stampa condiviso, impaginato con CSS paged media e reso da Chromium](0015-pdf-da-documento-di-stampa-condiviso-con-css-paged-media.md) | accepted | 2026-10-24 |

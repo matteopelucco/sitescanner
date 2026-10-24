@@ -9,7 +9,8 @@ sitescanner label   --site <id> --scan <ref> --label <txt> [--note <txt>]
 sitescanner report  [--site <id>] [--out report/]
 sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
 sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
-sitescanner export  --site <id> --base <ref> --head <ref> --out bundle/
+sitescanner export  --site <id> --base <ref> [--head <ref>] --out bundle/
+sitescanner pdf     --site <id> --base <ref> [--head <ref>] [--out file.pdf] [--redirect-map f.csv]
 sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
 ```
 
@@ -98,8 +99,8 @@ sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv]
 
 | ID | Requisito |
 |---|---|
-| RF-EXP-01 | `--site`, `--base`, `--head`, `--out` sono obbligatori. |
-| RF-EXP-02 | Crea in `--out` un report autonomo contenente solo il sito indicato e le due scan, con gli screenshot copiati nel bundle, e Base/Head già preselezionati. *(test e2e)* |
+| RF-EXP-01 | `--site`, `--base`, `--out` sono obbligatori; `--head` è facoltativo. |
+| RF-EXP-02 | Crea in `--out` un report autonomo contenente solo il sito indicato e le due scan, con gli screenshot copiati nel bundle, e Base/Head già preselezionati. Senza `--head` il bundle contiene la sola Base e si apre sulla vista diagnostica ([§7.7](07-report.md#77-vista-diagnostica-di-una-singola-scan)). *(test e2e)* |
 | RF-EXP-03 | Il bundle DEVE funzionare aperto da file e una volta spostato o compresso, senza riferimenti a `data/`. |
 | RF-EXP-04 | Se `--out` esiste, non è vuota e non contiene un bundle precedente (`index.html`), il comando rifiuta di scriverci. Se contiene un bundle precedente, ne sostituisce dati e screenshot. |
 
@@ -114,3 +115,11 @@ sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv]
 | RF-CMP-05 | `--json out.json` scrive il risultato completo: sito, data, versione del tool, `failOn`, `passed`, numero di voci della redirect map, metadati Base/Head, `summary`, `pairs`, `findings` (e `visual` se richiesto). |
 | RF-CMP-06 | `--visual` confronta pixel per pixel gli screenshot delle pagine abbinate (vedi [§6.6](06-confronto.md#66-confronto-visivo)). Se una delle due scan non ha screenshot viene emesso un avviso e il confronto visivo è parziale o assente. |
 | RF-CMP-07 | `compare.ignore` e `compare.thresholds` del sito vengono applicati; se la configurazione del sito non esiste più si usano i default. |
+
+## 3.11 `pdf`
+
+| ID | Requisito |
+|---|---|
+| RF-PDFC-01 | `--site` e `--base` sono obbligatori. Senza `--head` genera il report di qualità di Base, con `--head` il report di regressione Base → Head (vedi [§7.8](07-report.md#78-export-pdf)). *(test e2e)* |
+| RF-PDFC-02 | `--out` è il file da scrivere (le cartelle mancanti sono create); di default `sitescanner-<sito>-<base>[-vs-<head>].pdf` nella cartella corrente. `--redirect-map` come in `compare`; si applicano `compare.ignore` e `compare.thresholds` del sito. |
+| RF-PDFC-03 | Richiede Playwright con Chromium (lo stesso degli screenshot); la variabile d'ambiente `SITESCANNER_CHROMIUM` indica un eseguibile di Chromium/Chrome alternativo, usato anche per gli screenshot. Se il browser manca o non si avvia: errore d'uso (exit 2) con l'indicazione di come installarlo. *(test e2e)* |

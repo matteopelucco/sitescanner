@@ -30,6 +30,8 @@ Per le pagine presenti in entrambe le scan:
 - i campi di contenuto (title, description, canonical, lang, H1, meta robots, hreflang, testo, link, tempo di risposta) sono confrontati **solo se entrambe le pagine sono 2xx senza errori**;
 - i testi sono confrontati dopo la normalizzazione degli spazi; canonical, hreflang, destinazioni dei redirect e link interni dopo la riduzione a chiave di pagina, rimuovendo i parametri di tracciamento predefiniti e quelli di `ignoreParams` registrati nella configurazione di **entrambe** le scan (così anche scan salvate prima di una nuova regola ne beneficiano);
 - le issue di pagina sono confrontate per codice: un codice presente solo in Head è `issue-new`, solo in Base è `issue-resolved`;
+- una issue di una regola **non attiva in Base** (disattivata con `quality.disable` o introdotta tra le due scan; una scan che non registra `options.issueCodes` conta come se le avesse eseguite tutte) non è una regressione: `issue-new` ha severità info e il messaggio lo indica. Una issue di una regola non attiva in Head non produce `issue-resolved`;
+- indicizzabilità (§4.4) e tipi di dati strutturati sono confrontati se entrambe le pagine sono 2xx; i dati strutturati solo se entrambe le scan li hanno estratti;
 - le issue tra pagine (duplicati) sono confrontate per codice e valore duplicato, `broken-links` come issue di pagina.
 
 ## 6.4 Tipi di differenza
@@ -49,10 +51,12 @@ Per le pagine presenti in entrambe le scan:
 | `lang-changed` | warn | |
 | `robots-changed` | **error** se compare `noindex`, altrimenti warn | |
 | `hreflang-changed` | info | Insieme degli alternate diverso. |
+| `indexability-changed` | **error** se la pagina diventa non indicizzabile (escluso un nuovo meta `noindex`, già `robots-changed`); info se torna indicizzabile | Es. comparsa di `X-Robots-Tag: noindex` o di un canonical verso un'altra pagina. |
+| `structured-data-changed` | warn se spariscono tipi JSON-LD, info se se ne aggiungono soltanto | Insieme dei `@type` diverso. |
 | `content-changed` | warn se la variazione del numero di parole ≥ `contentWarnRatio`, altrimenti info | Hash del testo diverso. Il messaggio riporta parole prima/dopo e variazione percentuale. |
 | `links-changed` | warn se perde più del 20% dei link interni, altrimenti info | Link interni aggiunti o persi (fino a 50 per lato nel dettaglio). |
 | `perf-regression` | warn | Tempo Head ≥ `perfMinMs`, > `perfFactor` × tempo Base e con un aumento > `perfMinDeltaMs`. |
-| `issue-new` | severità della issue | |
+| `issue-new` | severità della issue; info se la regola non era attiva in Base | |
 | `issue-resolved` | info | |
 | `visual-changed` | warn se la quota di pixel diversi ≥ `visualWarn`; info se ≥ `visualInfo` o se cambiano le dimensioni | Solo con confronto visivo (§6.6). |
 

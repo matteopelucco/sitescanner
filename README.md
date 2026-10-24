@@ -45,7 +45,8 @@ sitescanner label   --site <id> --scan <id> --label <txt> [--note <txt>]
 sitescanner report  [--site <id>] [--out report/]
 sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
 sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
-sitescanner export  --site <id> --base <x> --head <y> --out bundle/
+sitescanner export  --site <id> --base <x> [--head <y>] --out bundle/
+sitescanner pdf     --site <id> --base <x> [--head <y>] [--out file.pdf] [--redirect-map f.csv]
 sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
 ```
 
@@ -55,7 +56,8 @@ sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--
 - **report**: genera `report/index.html`. Si apre anche con doppio clic (`file://`); con `ui` è disponibile in più il «Pixel diff» calcolato nel browser.
 - **ui**: avvia la web app (vedi «Web app»). Ascolta solo su `127.0.0.1` per default; con `--host` diverso la web app è raggiungibile da altre macchine **senza autenticazione**.
 - **inventory**: misura un sito (vedi «Inventario») e lo salva in `inventory/`.
-- **export**: crea una cartella autonoma con il report limitato alle due scan e i relativi screenshot copiati, già preselezionati come Base/Head. Si può zippare e condividere.
+- **export**: crea una cartella autonoma con il report limitato alle due scan e i relativi screenshot copiati, già preselezionati come Base/Head. Senza `--head` contiene la sola Base e si apre sulla sua diagnostica. Si può zippare e condividere.
+- **pdf**: report in PDF A4 da consegnare o allegare: senza `--head` il report di qualità della scan, con `--head` il report di regressione. Copertina con esito e health score, sommario, intestazioni e «Pagina N di M», sezioni impaginate per la stampa. Richiede Playwright con Chromium (come gli screenshot); `SITESCANNER_CHROMIUM` indica un Chrome/Chromium già installato.
 - **compare**: confronto da terminale/CI. `--fail-on error|warn` fa uscire con codice 1 se esistono differenze di quel livello o superiore; `--json` salva il risultato completo; `--visual` confronta pixel per pixel gli screenshot; `--redirect-map` accoppia URL vecchi e nuovi (CSV `from,to`, URL assoluti o path).
 
 Exit code: `0` ok · `1` soglia `--fail-on` superata o scan fallite · `2` errore d'uso o di configurazione.
@@ -81,14 +83,18 @@ Un file YAML per sito in `sites/`; il nome del file è l'id. Vedi l'esempio comm
 | `screenshots` | abilitati | `width`, `height`, `fullPage`, `maxHeight`, `waitMs`, `concurrency`, `hide` (selettori da nascondere) |
 | `compare.ignore` | `[]` | tipi di differenza da ignorare |
 | `compare.thresholds` | — | `contentWarnRatio` (0.3), `perfFactor` (2), `perfMinDeltaMs` (500), `perfMinMs` (1000), `visualWarn` (0.005), `visualInfo` (0.0001) |
+| `quality.disable` / `quality.severity` | — | issue di qualità da non calcolare / severità diverse dal default, es. `{ thin-content: warn }` |
+| `quality.<soglia>` | — | `slowMs` (2000), `titleMin`/`titleMax` (30/65), `descriptionMin`/`descriptionMax` (70/170), `thinWords` (200), `maxClickDepth` (3), `maxDomNodes` (1500), `maxUrlLength` (115) |
 
 Credenziali e header sensibili vengono mascherati nella copia della configurazione salvata dentro ogni scan.
 
 ## Cosa viene rilevato
 
-**Per pagina** (in ogni scan): status e catena di redirect, content-type, tempo di risposta, dimensione, title, meta description, meta robots, canonical, lang, H1 e conteggio heading, hreflang, Open Graph, numero di parole e hash del testo, link interni/esterni, immagini senza alt, contenuti misti, screenshot.
+**Per pagina** (in ogni scan): status e catena di redirect, content-type, tempo di risposta, dimensione, header (`X-Robots-Tag`, compressione, header di sicurezza), **indicizzabilità** con il motivo, title, meta description, meta robots, canonical, lang, H1 e struttura degli heading, hreflang, Open Graph, **dati strutturati JSON-LD**, numero di parole e hash del testo, link interni/esterni/nofollow, **profondità di click**, immagini (senza alt, senza dimensioni), accessibilità di base (campi senza label, pulsanti senza nome, iframe senza title), contenuti misti, screenshot.
 
-**Issue di qualità** (vista as-is): `http-4xx`, `http-5xx`, `fetch-failed`, `broken-links`, `redirect-broken`, `redirect-chain`, `slow-response`, `title-missing`, `title-too-long`, `title-duplicate`, `description-missing`, `description-too-long`, `description-duplicate`, `h1-missing`, `h1-multiple`, `img-alt-missing`, `mixed-content`, `noindex`, `canonical-missing`, `canonical-other`, `lang-missing`, `viewport-missing`, `page-heavy`.
+**Issue di qualità** (vista as-is): 74 controlli, scelti confrontando Screaming Frog, Semrush, Ahrefs, Sitebulb e Lighthouse ([ricerca](docs/research/controlli-di-qualita.md)), in 15 categorie: risposte e soft 404, redirect (catene, loop, temporanei, meta refresh), indicizzabilità, canonical (multipli, verso pagine rotte, redirect o noindex), title e description (assenti, lunghi, corti, multipli, duplicati), heading, contenuti (thin, duplicati, lorem ipsum), link (rotti, verso redirect, pagine senza link in uscita, profonde, anchor vuoti o generici), sitemap e robots (URL non indicizzabili in sitemap, pagine orfane o mancanti), hreflang (codici, ritorno, x-default), dati strutturati, sicurezza (mixed content, form HTTP, header), prestazioni, HTML e URL, accessibilità. Elenco completo con severità in [§4.4 delle specifiche](docs/specs/04-scansione.md#44-issue-di-qualità); ogni regola si può disattivare o cambiare di severità con `quality`.
+
+**Health score**: per ogni scan, la quota (0–100) di URL senza issue `error`; è nello storico, nella diagnostica e nel confronto.
 
 **Differenze Base → Head** (le pagine sono accoppiate per path, quindi si possono confrontare anche ambienti diversi, es. stage vs prod):
 
@@ -103,16 +109,18 @@ Credenziali e header sensibili vengono mascherati nella copia della configurazio
 | `robots-changed` | error se compare `noindex`, altrimenti warn |
 | `content-changed` | warn oltre `contentWarnRatio` di variazione parole, altrimenti info |
 | `links-changed` | warn se perde > 20% dei link interni, altrimenti info |
+| `indexability-changed` | error se la pagina diventa non indicizzabile (es. `X-Robots-Tag: noindex`, canonical altrove), info se torna indicizzabile |
+| `structured-data-changed` | warn se spariscono tipi JSON-LD, info se se ne aggiungono |
 | `perf-regression` | warn |
-| `issue-new` / `issue-resolved` | severità della issue / info |
+| `issue-new` / `issue-resolved` | severità della issue / info; info se la regola non era attiva in Base (scan di una versione precedente o regola disattivata) |
 | `visual-changed` | warn oltre `visualWarn`, info oltre `visualInfo` (solo con `--visual`) |
 
 ## Web app
 
 `sitescanner ui` avvia sul proprio computer una web app con:
 
-- **Siti**: elenco con ultima scan ed errori; creazione e modifica della configurazione con un form (che conserva i commenti del YAML) o direttamente in YAML; eliminazione (lo storico resta).
-- **Scan**: avvio per ambiente con label, nota, limite di pagine e opzione senza screenshot; avanzamento in tempo reale (fase, pagine visitate/scoperte, URL corrente) e annullamento; storico con label modificabili e link «Confronta con la precedente» al report.
+- **Siti**: elenco con ultima scan ed errori; creazione e modifica della configurazione con un form (che conserva i commenti del YAML) o direttamente in YAML; eliminazione con scelta esplicita se tenere lo storico (il sito resta «solo storico») o cancellarlo definitivamente, scan e screenshot compresi.
+- **Scan**: avvio per ambiente con label, nota, limite di pagine e opzione senza screenshot; avanzamento in tempo reale (fase, pagine visitate/scoperte, URL corrente) e annullamento; storico con health score, label modificabili e link a diagnostica, PDF e «Confronta con la precedente» nel report.
 - **Inventari**: avvio su un sito configurato o su un URL qualsiasi, elenco e dettaglio.
 - **Attività**: tutti i job della sessione, con log.
 
@@ -145,6 +153,10 @@ Si sceglie un sito e due scan dalla sua storia (Base e Head, invertibili). Il re
 - **Storico**: andamento di pagine/errori/warning e scelta rapida di Base e Head.
 
 Cliccando una pagina si apre il dettaglio: differenze, confronto campo per campo, issue, screenshot (affiancati, slider, fusione «difference», pixel diff, singoli) e diff del testo. Si può caricare una redirect map CSV direttamente nel report. Lo stato (sito, scan, pagina aperta) è nell'URL, quindi i link sono condivisibili.
+
+**Diagnostica di una scan**: lasciando vuota Head («— nessuna —») il report mostra lo stato di qualità della sola Base: esito, dati del crawl, contatori per severità e per status, issue raggruppate per codice con le pagine coinvolte, tutte le pagine filtrabili per status e issue, e un dettaglio pagina con issue, campi, link entranti e uscenti, screenshot e testo. È la vista predefinita per un sito con una sola scan.
+
+**PDF**: il pulsante «PDF» esporta la vista corrente (qualità o regressione). Con `sitescanner ui` il PDF è generato dal server; aprendo il report da file o da un bundle si apre il documento di stampa e si salva con «Salva come PDF» del browser (Chrome/Edge per intestazioni e numeri di pagina).
 
 ## Dati
 
@@ -179,9 +191,9 @@ sitescanner compare --site shop --base release --head latest --fail-on error --j
 npm test
 ```
 
-I test avviano un piccolo sito locale in due versioni e verificano scan, storico, confronto, redirect map, label, report ed export; `test/web.test.js` verifica API della web app, job, inventario e protezioni del server.
+I test avviano un piccolo sito locale in due versioni e verificano scan, storico, confronto, redirect map, label, report, export e PDF; `test/analyze.test.js` le regole di qualità, `test/diagnose.test.js` e `test/print.test.js` diagnostica e documento di stampa, `test/web.test.js` API della web app, job, inventario e protezioni del server.
 
-Il modulo [src/core/compare.js](src/core/compare.js) non ha dipendenze ed è incluso così com'è nel report: CLI e browser usano la stessa logica di confronto.
+I moduli di [src/core/](src/core/) (`compare.js`, `diagnose.js`, `print.js`) non hanno dipendenze esterne e sono inclusi così come sono nel report: CLI e browser usano la stessa logica di confronto, diagnostica e documento di stampa.
 
 ### Limiti noti
 

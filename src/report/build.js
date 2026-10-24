@@ -13,7 +13,10 @@ const toUrl = (p) => p.split(path.sep).map(encodeURIComponent).join('/');
 const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 
 function renderIndexHtml() {
-  const core = read('../core/compare.js').replace(/^export /gm, '');
+  // Core modules share one script scope in the browser: drop their imports and exports.
+  const core = ['../core/compare.js', '../core/diagnose.js', '../core/print.js']
+    .map((f) => read(f).replace(/^import .*$/gm, '').replace(/^export /gm, ''))
+    .join('\n');
   return read('app.html')
     .replace('/*__CSS__*/', () => read('app.css'))
     .replace('/*__CORE__*/', () => core)
@@ -102,6 +105,11 @@ export function buildReport({ outDir, sites, onlyScans = null, copyAssets = fals
     });
   }
 
+  // A full build drops the data of sites that no longer exist (e.g. history deleted from the web app).
+  if (!sites && !onlyScans) {
+    const live = new Set(index.sites.map((s) => s.id));
+    for (const e of fs.readdirSync(dataOut, { withFileTypes: true })) if (e.isDirectory() && !live.has(e.name)) fs.rmSync(path.join(dataOut, e.name), { recursive: true, force: true });
+  }
   writeIfChanged(path.join(dataOut, 'index.js'), `window.SS_INDEX=${js(index)};\n`);
   fs.writeFileSync(path.join(out, 'index.html'), renderIndexHtml());
   return { outDir: out, sites: index.sites.length, scans: scanCount };

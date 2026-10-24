@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { analyzeHtml, pageIssues, siteIssues, sha1 } from './analyze.js';
+import { analyzeHtml, pageIssues, siteIssues, setIndexability, applyQuality, sha1 } from './analyze.js';
 import { toKey, TRACKING_PARAMS } from './core/compare.js';
 
 const MAX_BODY = 10 * 1024 * 1024;
@@ -50,6 +50,15 @@ function parseRobots(txt, uaToken) {
       return !best || best.allow;
     },
   };
+}
+
+const SECURITY_HEADERS = { hsts: 'strict-transport-security', csp: 'content-security-policy', xcto: 'x-content-type-options', xfo: 'x-frame-options', referrer: 'referrer-policy' };
+
+// Short names of the security headers present in a response (frame-ancestors in CSP counts as X-Frame-Options).
+function securityHeaders(h) {
+  const present = Object.keys(SECURITY_HEADERS).filter((k) => h.get(SECURITY_HEADERS[k]));
+  if (!present.includes('xfo') && /frame-ancestors/i.test(h.get('content-security-policy') || '')) present.push('xfo');
+  return present;
 }
 
 function extractLocs(xml) {
@@ -116,8 +125,10 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
   // robots.txt
   onProgress({ phase: 'robots', done: 0, limit, discovered: 0 });
   let robots = null;
+  let robotsFound = null;
   if (cfg.respectRobots || cfg.sitemap === true) {
     const txt = await getText(origin + '/robots.txt');
+    robotsFound = txt != null;
     if (txt) robots = parseRobots(txt, String(cfg.userAgent).toLowerCase());
   }
   const robotsAllowed = (key) => !cfg.respectRobots || !robots || robots.allowed(key);
@@ -126,6 +137,7 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
   const seeds = [];
   for (const s of cfg.start) seeds.push(new URL(s, env.baseUrl).toString());
   let sitemapUrls = 0;
+  let sitemapFound = null;
   const sitemapSeeds = [];
   if (cfg.sitemap) {
     onProgress({ phase: 'sitemap', done: 0, limit, discovered: 0 });
@@ -134,12 +146,14 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
       : [...new Set([new URL('sitemap.xml', origin + scopePrefix).toString(), ...((robots && robots.sitemaps) || [])])];
     const seen = new Set();
     const queue = [...roots];
+    sitemapFound = false;
     while (queue.length && seen.size < 50) {
       const sm = queue.shift();
       if (seen.has(sm)) continue;
       seen.add(sm);
       const xml = await getText(sm);
       if (!xml) continue;
+      sitemapFound = true;
       const locs = extractLocs(xml);
       if (/<sitemapindex/i.test(xml)) queue.push(...locs);
       else for (const l of locs) {
@@ -177,6 +191,7 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
     try {
       let url = item.url;
       let res;
+      const chain = new Set([url]);
       for (let hop = 0; hop <= 10; hop++) {
         res = await request(url);
         if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
@@ -185,6 +200,8 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
           await res.body?.cancel();
           url = next;
           if (!inScope(next)) { page.offsite = true; break; }
+          if (chain.has(next) || hop === 10) { page.redirectLoop = true; break; }
+          chain.add(next);
           continue;
         }
         break;
@@ -197,6 +214,8 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
       page.isHtml = /html/.test(ct);
       const etag = res.headers.get('etag');
       if (etag) page.etag = etag;
+      const xRobots = res.headers.get('x-robots-tag');
+      if (xRobots) page.xRobots = xRobots;
       if (page.offsite) {
         page.isHtml = false;
       } else if (page.redirects.length) {
@@ -214,19 +233,24 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
         if (res.status < 400) {
           const { page: fields, text, links } = analyzeHtml(html, url);
           Object.assign(page, fields);
+          // fetch decompresses transparently but keeps the header
+          page.compressed = !!res.headers.get('content-encoding');
+          page.charset = page.charset || (/charset=([\w-]+)/i.exec(ct) || [])[1] || null;
+          page.securityHeaders = securityHeaders(res.headers);
           if (page.canonical) {
             try { page.canonicalKey = inScope(page.canonical) ? keyOf(page.canonical) : page.canonical; } catch { /* ignore */ }
           }
           const internal = new Set();
-          let external = 0;
+          let external = 0, nofollow = 0;
           for (const l of links) {
             if (inScope(l.url)) {
               const k = keyOf(l.url);
               internal.add(k);
+              if (l.nofollow) nofollow++;
               if (!l.nofollow && item.depth < cfg.maxDepth) enqueue(l.url, item.depth + 1, item.key, nextLevel);
             } else external++;
           }
-          page.links = { internal: [...internal].sort(), external };
+          page.links = { internal: [...internal].sort(), external, nofollow };
           if (cfg.storeText) texts.set(item.key, text);
         }
       } else {
@@ -265,15 +289,20 @@ export async function crawl(cfg, env, { maxPages, keepHtmlDir = null, log = () =
   }
 
   const list = [...pages.values()].sort((a, b) => a.key.localeCompare(b.key));
+  const quality = cfg.quality || {};
   for (const p of list) {
     if (!p.offsite && p.redirects.length && p.finalStatus >= 400) p.redirectBroken = true;
-    p.issues = pageIssues(p);
+    setIndexability(p);
+    p.issues = pageIssues(p, quality);
     if (p.redirectBroken) p.issues.push({ code: 'redirect-broken', severity: 'error', message: `Il redirect termina con status ${p.finalStatus}` });
   }
-  const issues = siteIssues(list);
   const seedKeys = (urls) => [...new Set(urls.filter(inScope).map(keyOf))].sort();
+  const startKeys = seedKeys(seeds.slice(0, cfg.start.length));
+  const sitemapKeys = seedKeys(sitemapSeeds);
+  const site = siteIssues(list, { startKeys, sitemapKeys, robotsFound, sitemapFound, quality });
+  const { issues, issueCodes } = applyQuality(list, site, quality);
   return {
-    pages: list, issues, texts, sitemapUrls, unvisited: queued.size - pages.size,
-    seeds: { start: seedKeys(seeds.slice(0, cfg.start.length)), sitemap: seedKeys(sitemapSeeds) },
+    pages: list, issues, issueCodes, texts, sitemapUrls, unvisited: queued.size - pages.size, robotsFound, sitemapFound,
+    seeds: { start: startKeys, sitemap: sitemapKeys },
   };
 }

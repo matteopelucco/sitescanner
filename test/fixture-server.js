@@ -27,7 +27,9 @@ function routes(v) {
 
 export async function startFixture() {
   let version = 1;
-  const server = http.createServer((req, res) => {
+  let delayMs = 0;
+  const server = http.createServer(async (req, res) => {
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
     const url = new URL(req.url, 'http://x');
     const origin = `http://${req.headers.host}`;
     if (url.pathname === '/robots.txt') {
@@ -63,6 +65,8 @@ export async function startFixture() {
   return {
     url: `http://127.0.0.1:${port}/`,
     setVersion: (v) => { version = v; },
+    // slows every response down, to keep a crawl running during a test
+    setDelay: (ms) => { delayMs = ms; },
     close: () => new Promise((r) => server.close(r)),
   };
 }

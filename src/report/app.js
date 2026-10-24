@@ -48,13 +48,18 @@
   const state = {
     site: null, base: null, head: null, tab: 'diff', page: null,
     sev: new Set(['error', 'warn', 'info']), type: '', q: '', pstate: '', pq: '', openIssue: null,
+    pstatus: '', pissue: '', icat: '',
     redirectMap: null, rmapName: '', shot: 'side', limit: 200,
-    result: null, baseScan: null, headScan: null, error: null,
+    result: null, diag: null, baseScan: null, headScan: null, error: null,
   };
+  // Head empty: diagnostic view of the Base scan alone instead of the comparison.
+  const single = () => !state.head;
 
   function readHash() {
     const h = new URLSearchParams(location.hash.slice(1));
-    return { site: h.get('site'), base: h.get('base'), head: h.get('head'), tab: h.get('tab'), page: h.get('page') };
+    // base without head (or with an empty head) is the single-scan diagnostic view
+    const head = h.get('base') && !h.get('head') ? '' : h.get('head');
+    return { site: h.get('site'), base: h.get('base'), head, tab: h.get('tab'), page: h.get('page') };
   }
   function writeHash() {
     const h = new URLSearchParams();
@@ -74,6 +79,7 @@
     const scans = site.scans;
     if (!scans.length) return [null, null];
     const head = scans[scans.length - 1];
+    if (scans.length === 1) return [head.id, null];
     const prevSameEnv = [...scans].reverse().find((s) => s.id !== head.id && s.env === head.env);
     const base = prevSameEnv || scans[scans.length - 2] || head;
     return [base.id, head.id];
@@ -90,13 +96,15 @@
     const site = siteOf(state.site);
     const opts = site ? [...site.scans].reverse().map(scanOption).join('') : '';
     $('#base').innerHTML = opts;
-    $('#head').innerHTML = opts;
+    $('#head').innerHTML = (site && site.scans.length ? '<option value="">— nessuna: diagnostica di Base —</option>' : '') + opts;
     $('#base').value = state.base || '';
     $('#head').value = state.head || '';
+    $('#swap').disabled = single();
     $('#rmapLabel').textContent = state.redirectMap ? `Redirect map: ${state.rmapName} (${Object.keys(state.redirectMap).length}) ✕` : 'Redirect map…';
     $('#rmapLabel').parentElement.classList.toggle('on', !!state.redirectMap);
   }
 
+  // head: undefined → default, '' → none (diagnostic view)
   function selectSite(id, base, head) {
     const site = siteOf(id) || INDEX.sites[0];
     state.site = site ? site.id : null;
@@ -104,16 +112,31 @@
     const ids = new Set(site.scans.map((s) => s.id));
     const [db, dh] = defaultPair(site);
     state.base = base && ids.has(base) ? base : db;
-    state.head = head && ids.has(head) ? head : dh;
+    state.head = head === '' ? null : head && ids.has(head) ? head : dh;
     fillPickers();
   }
 
   async function compute() {
     state.result = null;
+    state.diag = null;
     state.error = null;
     const site = siteOf(state.site);
-    if (!site || !state.base || !state.head) return render();
+    if (!site || !state.base) return render();
     $('#app').innerHTML = '<p class="empty">Caricamento scan…</p>';
+    if (single()) {
+      try {
+        const b = await load('scan', site.id, state.base);
+        const bm = metaOf(state.base);
+        state.baseScan = { ...b, label: bm?.label ?? b.label, note: bm?.note ?? b.note };
+        state.headScan = null;
+        state.diag = diagnoseScan(state.baseScan);
+      } catch (e) {
+        state.error = e.message;
+      }
+      render();
+      if (state.page) openDetail(state.page, true);
+      return;
+    }
     try {
       const [b, h] = await Promise.all([load('scan', site.id, state.base), load('scan', site.id, state.head)]);
       const bm = metaOf(state.base), hm = metaOf(state.head);
@@ -148,23 +171,13 @@
       app.innerHTML = '<p class="empty">Nessuna scan per questo sito.</p>';
       return;
     }
+    if (single()) return renderSingle(site);
     const r = state.result;
     if (!r) return;
     const s = r.summary;
     const same = state.base === state.head;
     const verdictCls = s.error ? 'fail' : s.warn ? 'warn' : 'pass';
     const verdictTxt = same ? 'Stessa scan' : s.error ? 'Regressioni' : s.warn ? 'Da verificare' : 'Nessuna regressione';
-
-    const card = (title, scan) => `
-      <div class="scanCard">
-        <h3>${title}</h3>
-        <div><strong>${esc(fmtDate(scan.startedAt))}</strong> <span class="tag">${esc(scan.env)}</span> ${scan.label ? `<span class="tag label">${esc(scan.label)}</span>` : ''}</div>
-        <div class="id">${esc(scan.id)}</div>
-        <div class="meta">${esc(scan.baseUrl)} · ${fmtNum(scan.stats.pages)} pagine${scan.crawl && scan.crawl.truncated ? ' (troncata a maxPages)' : ''}${scan.options.screenshots ? ' · screenshot' : ''}</div>
-        ${scan.note ? `<div class="meta">📝 ${esc(scan.note)}</div>` : ''}
-      </div>`;
-
-    const stat = (k, v, d, action) => `<div class="stat${action ? ' click' : ''}" ${action ? `data-act="${action}"` : ''}><div class="k">${k}</div><div class="v">${v}</div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
     const headIssueCount = countIssues(state.headScan);
 
     app.innerHTML = `
@@ -173,9 +186,10 @@
         ${card('Base', state.baseScan)}
         ${card('Head', state.headScan)}
       </div>
-      ${same ? '<p class="hint">Base e Head coincidono: scegli due scan diverse per il confronto. Le issue della scan restano consultabili nella scheda «Issue».</p>' : ''}
+      ${same ? '<p class="hint">Base e Head coincidono: scegli due scan diverse per il confronto, oppure lascia Head vuota per la diagnostica della scan.</p>' : ''}
       <div class="stats">
         ${stat('Pagine', `${fmtNum(r.base.pages)} → ${fmtNum(r.head.pages)}`, '', '')}
+        ${stat('Health score', `${healthScore(state.baseScan) ?? '—'} → ${healthScore(state.headScan) ?? '—'}`, '', '')}
         ${stat('Errori', s.error, '', 'sev:error')}
         ${stat('Warning', s.warn, '', 'sev:warn')}
         ${stat('Info', s.info, '', 'sev:info')}
@@ -194,6 +208,122 @@
     renderTab();
   }
 
+  const card = (title, scan) => `
+      <div class="scanCard">
+        <h3>${title}</h3>
+        <div><strong>${esc(fmtDate(scan.startedAt))}</strong> <span class="tag">${esc(scan.env)}</span> ${scan.label ? `<span class="tag label">${esc(scan.label)}</span>` : ''}</div>
+        <div class="id">${esc(scan.id)}</div>
+        <div class="meta">${esc(scan.baseUrl)} · ${fmtNum(scan.stats.pages)} pagine${scan.crawl && scan.crawl.truncated ? ' (troncata a maxPages)' : ''}${scan.options.screenshots ? ' · screenshot' : ''}</div>
+        ${scan.note ? `<div class="meta">📝 ${esc(scan.note)}</div>` : ''}
+      </div>`;
+
+  const stat = (k, v, d, action) => `<div class="stat${action ? ' click' : ''}" ${action ? `data-act="${action}"` : ''}><div class="k">${k}</div><div class="v">${v}</div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
+
+  const fmtMs = (v) => (v == null ? '—' : `${fmtNum(v)} ms`);
+  const fmtDuration = (ms) => (ms == null ? '—' : ms < 60000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60000)} min ${Math.round((ms % 60000) / 1000)} s`);
+  const STATUS_LABEL = { '2xx': '2xx', '3xx': '3xx redirect', '4xx': '4xx', '5xx': '5xx', fail: 'non raggiungibili' };
+  const STATUS_FILTERS = { ...STATUS_LABEL, http: '4xx + 5xx' };
+  const ISSUE_FILTERS = { noindex: 'non indicizzabili', any: 'con issue', error: 'con error', warn: 'con warning', info: 'con info', none: 'senza issue' };
+
+  // ---- single-scan diagnostic view ----
+  function renderSingle(site) {
+    if (!state.diag) return;
+    if (state.tab === 'diff') state.tab = 'issues';
+    writeHash();
+    const scan = state.baseScan, d = state.diag, s = d.summary, st = s.byStatus;
+    const verdictCls = s.error ? 'fail' : s.warn ? 'warn' : 'pass';
+    const verdictTxt = s.error ? 'Errori da correggere' : s.warn ? 'Da verificare' : 'Nessun problema';
+    const crawlCard = `
+      <div class="scanCard">
+        <h3>Crawl</h3>
+        <div class="meta">Durata ${esc(fmtDuration(scan.durationMs))} · risposta media ${esc(fmtMs(s.avgResponseMs))}</div>
+        <div class="meta">${Object.keys(STATUS_LABEL).filter((k) => st[k]).map((k) => `${fmtNum(st[k])} ${STATUS_LABEL[k]}`).join(' · ') || '—'}</div>
+        <div class="meta">${fmtNum(scan.crawl?.sitemapUrls || 0)} URL da sitemap${s.truncated ? ` · ${fmtNum(scan.crawl.unvisited)} URL non visitati (maxPages)` : ''}</div>
+      </div>`;
+    $('#app').innerHTML = `
+      <div class="verdict">
+        <div class="badge-big ${verdictCls}"><span class="n">${verdictTxt}</span><small>Health score ${s.healthScore ?? '—'}/100 · ${s.error} errori · ${s.warn} warning · ${s.info} info</small></div>
+        ${card('Scan · diagnostica', scan)}
+        ${crawlCard}
+      </div>
+      <p class="hint">Diagnostica della sola scan Base. Scegli una scan in «Head» per vedere le regressioni rispetto a Base.</p>
+      <div class="stats">
+        ${stat('Pagine', fmtNum(s.pages), '', 'status:')}
+        ${stat('Health score', s.healthScore ?? '—', 'pagine senza errori', 'pissue:error')}
+        ${stat('Indicizzabili', fmtNum(s.indexable), s.pages ? `${Math.round((100 * s.indexable) / s.pages)}%` : '', 'pissue:noindex')}
+        ${stat('Con issue', fmtNum(s.pagesWithIssues), s.pages ? `${Math.round((100 * s.pagesWithIssues) / s.pages)}%` : '', 'pissue:any')}
+        ${stat('Errori', fmtNum(s.error), '', 'sev:error')}
+        ${stat('Warning', fmtNum(s.warn), '', 'sev:warn')}
+        ${stat('Info', fmtNum(s.info), '', 'sev:info')}
+        ${stat('2xx', fmtNum(st['2xx']), '', 'status:2xx')}
+        ${stat('3xx', fmtNum(st['3xx']), '', 'status:3xx')}
+        ${stat('4xx / 5xx', fmtNum(st['4xx'] + st['5xx']), '', 'status:http')}
+        ${stat('Non raggiungibili', fmtNum(st.fail), '', 'status:fail')}
+      </div>
+      <nav class="tabs" role="tablist">
+        ${tabBtn('issues', 'Issue', d.codes.length)}
+        ${tabBtn('pages', 'Pagine', d.pages.length)}
+        ${tabBtn('history', 'Storico', site.scans.length)}
+      </nav>
+      <div id="tab"></div>`;
+    renderTab();
+  }
+
+  function renderSingleIssues() {
+    const d = state.diag;
+    const q = state.q.trim().toLowerCase();
+    const matchCode = (c) => `${c.code} ${c.label}`.toLowerCase().includes(q);
+    const matchItem = (it) => `${it.key} ${it.message} ${(it.pages || []).join(' ')}`.toLowerCase().includes(q);
+    const rows = d.codes.filter((c) => state.sev.has(c.severity) && (!state.icat || c.category === state.icat) && (!q || matchCode(c) || c.items.some(matchItem)));
+    const cats = [...new Set(d.codes.map((c) => c.category))].sort();
+    const sevCount = (s) => d.codes.filter((c) => c.severity === s).reduce((n, c) => n + c.occurrences, 0);
+    const pageLink = (k) => `<span class="plink" data-page="${esc(k)}">${esc(k)}</span>`;
+    const item = (it) => (it.pages
+      ? `<tr><td></td><td colspan="4" class="msg">${esc(it.message)}<div class="plinks">${it.pages.slice(0, 50).map(pageLink).join(' ')}${it.pages.length > 50 ? ` <span class="hint">… altre ${it.pages.length - 50}</span>` : ''}</div></td></tr>`
+      : `<tr class="click" data-page="${esc(it.key)}"><td></td><td class="key" colspan="4">${esc(it.key)} <span class="hint">— ${esc(it.message)}</span></td></tr>`);
+    return `
+      <div class="toolbar">
+        ${SEVERITIES.map((s) => `<button class="chip${state.sev.has(s) ? ' on' : ''}" data-sev="${s}"><span class="dot ${s}"></span>${s} ${sevCount(s)}</button>`).join('')}
+        <select id="icat" aria-label="Categoria"><option value="">Tutte le categorie</option>${cats.map((c) => `<option${state.icat === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
+        <input type="search" id="fq" placeholder="Cerca issue, pagina o messaggio…" value="${esc(state.q)}">
+      </div>
+      ${rows.length ? `<p class="hint">Issue di qualità della scan per codice. Clicca una riga per vedere le pagine coinvolte.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Sev.</th><th>Issue</th><th>Categoria</th><th class="num">Occorrenze</th><th class="num">Pagine</th></tr></thead>
+        <tbody>${rows.map((c) => {
+          const open = state.openIssue === c.code;
+          const items = !open ? [] : q && !matchCode(c) ? c.items.filter(matchItem) : c.items;
+          return `<tr class="click" data-issue="${esc(c.code)}"><td>${sevBadge(c.severity)}</td><td>${esc(c.label)} <code class="hint">${esc(c.code)}</code> ${open ? '▾' : '▸'}</td><td class="hint">${esc(c.category)}</td><td class="num">${fmtNum(c.occurrences)}</td><td class="num">${fmtNum(c.pages)}</td></tr>
+            ${items.slice(0, 300).map(item).join('')}
+            ${items.length > 300 ? `<tr><td></td><td colspan="4" class="hint">… altre ${items.length - 300} occorrenze: restringi con la ricerca.</td></tr>` : ''}`;
+        }).join('')}</tbody>
+      </table></div>`
+      : `<p class="empty">${d.codes.length ? 'Nessuna issue con i filtri correnti.' : 'Nessuna issue rilevata nella scan.'}</p>`}`;
+  }
+
+  function renderSinglePages() {
+    const d = state.diag;
+    const q = state.pq.trim().toLowerCase();
+    const byStatus = (p, f) => !f || p.status === f || (f === 'http' && (p.status === '4xx' || p.status === '5xx'));
+    const byIssue = (p) => !state.pissue || (state.pissue === 'noindex' ? !!p.indexability : state.pissue === 'none' ? !p.worst : state.pissue === 'any' ? !!p.worst : p.counts[state.pissue] > 0);
+    const rows = d.pages.filter((p) => byStatus(p, state.pstatus) && byIssue(p) && (!q || `${p.key} ${p.title || ''}`.toLowerCase().includes(q)));
+    const shown = rows.slice(0, state.limit);
+    const counts = (c) => SEVERITIES.filter((s) => c[s]).map((s) => `<span class="sev ${s}">${c[s]}</span>`).join(' ');
+    const status = (p) => (p.error ? `<span class="st sx" title="${esc(p.error)}">ERR</span>` : `<span class="st s${String(p.code)[0]}">${p.code}</span>`);
+    return `
+      <div class="toolbar">
+        <select id="pstatus" aria-label="Status"><option value="">Tutti gli status</option>${Object.entries(STATUS_FILTERS).map(([k, l]) => `<option value="${k}"${state.pstatus === k ? ' selected' : ''}>${l} (${d.pages.filter((p) => byStatus(p, k)).length})</option>`).join('')}</select>
+        <select id="pissue" aria-label="Issue"><option value="">Tutte le pagine</option>${Object.entries(ISSUE_FILTERS).map(([k, l]) => `<option value="${k}"${state.pissue === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        <input type="search" id="pq" placeholder="Filtra per path o title…" value="${esc(state.pq)}">
+      </div>
+      ${rows.length ? `<div class="tablewrap"><table>
+        <thead><tr><th>Pagina</th><th>Status</th><th>Title</th><th class="num">Clic</th><th class="num">Link entranti</th><th>Issue</th></tr></thead>
+        <tbody>${shown.map((p) => `<tr class="click" data-page="${esc(p.key)}"><td class="key">${esc(p.key)}${p.indexability ? `<div class="hint">non indicizzabile: ${esc(p.indexability)}</div>` : ''}</td><td>${status(p)}</td><td class="msg">${esc(p.title || '')}</td><td class="num">${esc(p.clickDepth ?? '—')}</td><td class="num">${fmtNum(p.inlinks)}</td><td>${counts(p.counts)}</td></tr>`).join('')}</tbody>
+      </table></div>
+      ${rows.length > shown.length ? `<button class="btn more" data-act="more">Mostra altri (${rows.length - shown.length})</button>` : ''}`
+      : '<p class="empty">Nessuna pagina con i filtri correnti.</p>'}`;
+  }
+
   const tabBtn = (id, label, n) => `<button class="tab${state.tab === id ? ' on' : ''}" data-tab="${id}" role="tab">${label}<span class="count">${fmtNum(n)}</span></button>`;
 
   function countIssues(scan) {
@@ -203,6 +333,12 @@
   function renderTab() {
     const el = $('#tab');
     if (!el) return;
+    if (single()) {
+      if (state.tab === 'pages') el.innerHTML = renderSinglePages();
+      else if (state.tab === 'history') el.innerHTML = renderHistory();
+      else el.innerHTML = renderSingleIssues();
+      return;
+    }
     if (state.tab === 'pages') el.innerHTML = renderPages();
     else if (state.tab === 'issues') el.innerHTML = renderIssues();
     else if (state.tab === 'history') el.innerHTML = renderHistory();
@@ -327,15 +463,16 @@
     }
     return `${chart}
       <div class="tablewrap"><table>
-        <thead><tr><th>Data</th><th>Scan</th><th>Env</th><th>Label</th><th class="num">Pagine</th><th class="num">E</th><th class="num">W</th><th class="num">I</th><th></th></tr></thead>
+        <thead><tr><th>Data</th><th>Scan</th><th>Env</th><th>Label</th><th class="num">Pagine</th><th class="num" title="Health score">Health</th><th class="num">E</th><th class="num">W</th><th class="num">I</th><th></th></tr></thead>
         <tbody>${[...scans].reverse().map((s) => `<tr>
           <td>${esc(fmtDate(s.startedAt))}</td>
           <td class="key">${esc(s.id)}${s.note ? `<div class="hint">${esc(s.note)}</div>` : ''}</td>
           <td><span class="tag">${esc(s.env)}</span></td>
           <td>${s.label ? `<span class="tag label">${esc(s.label)}</span>` : ''}</td>
           <td class="num">${fmtNum(s.stats.pages)}</td>
+          <td class="num">${s.stats.healthScore ?? '—'}</td>
           <td class="num">${s.stats.issues.error}</td><td class="num">${s.stats.issues.warn}</td><td class="num">${s.stats.issues.info}</td>
-          <td style="white-space:nowrap"><button class="btn small${s.id === state.base ? ' on' : ''}" data-setbase="${esc(s.id)}">Base</button> <button class="btn small${s.id === state.head ? ' on' : ''}" data-sethead="${esc(s.id)}">Head</button></td>
+          <td style="white-space:nowrap"><button class="btn small${s.id === state.base ? ' on' : ''}" data-setbase="${esc(s.id)}">Base</button> <button class="btn small${s.id === state.head ? ' on' : ''}" data-sethead="${esc(s.id)}">Head</button> <button class="btn small${s.id === state.base && single() ? ' on' : ''}" data-single="${esc(s.id)}" title="Diagnostica della sola scan">Solo</button></td>
         </tr>`).join('')}</tbody>
       </table></div>`;
   }
@@ -346,7 +483,41 @@
     return `<tr class="${same ? '' : 'diff'}"><td>${label}</td><td class="b">${fmt(bv)}</td><td class="h">${fmt(hv)}</td></tr>`;
   }
 
+  const list = (a) => (a && a.length ? a.map(esc).join('<br>') : '—');
+  const pageLink = (p) => (p ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>` : '—');
+  const issueList = (a) => (a && a.length ? [...a].sort((x, y) => SEVERITY_RANK[y.severity] - SEVERITY_RANK[x.severity]).map((i) => `<div>${sevBadge(i.severity)} <code>${esc(i.code)}</code> <span class="hint">${esc(i.message)}</span></div>`).join('') : '<span class="hint">nessuna</span>');
+  const plain = (v) => esc(v ?? '—');
+  // [label, value getter, formatter, excluded from the Base/Head highlight]
+  const FIELDS = [
+    ['Status', (p) => p.error || p.status],
+    ['Redirect', (p) => (p.redirects || []).map((x) => `${x.status} → ${x.location}`), list],
+    ['Content-Type', (p) => p.contentType],
+    ['Title', (p) => p.title],
+    ['Description', (p) => p.description],
+    ['H1', (p) => p.h1, list],
+    ['Canonical', (p) => p.canonical],
+    ['Meta robots', (p) => p.robots],
+    ['Lang', (p) => p.lang],
+    ['Heading', (p) => p.headings, (v) => (v ? Object.entries(v).filter(([, n]) => n).map(([k, n]) => `${k}:${n}`).join(' ') || '—' : '—')],
+    ['Parole', (p) => p.wordCount, fmtNum],
+    ['Hash testo', (p) => p.textHash, (v) => `<code>${esc(v || '—')}</code>`],
+    ['Link interni', (p) => p.links?.internal?.length, fmtNum],
+    ['Link esterni', (p) => p.links?.external, fmtNum],
+    ['Immagini (senza alt)', (p) => (p.images ? `${p.images.total} (${p.images.missingAlt})` : null)],
+    ['Hreflang', (p) => (p.hreflang || []).map((x) => `${x.lang}: ${x.href}`), list],
+    ['OG title', (p) => p.og?.title],
+    ['OG image', (p) => p.og?.image],
+    ['Tempo risposta', (p) => p.responseMs, fmtMs, true],
+    ['Dimensione HTML', (p) => p.bytes, fmtBytes, true],
+    ['Profondità crawl', (p) => p.depth, plain, true],
+    ['Profondità di click', (p) => p.clickDepth, plain, true],
+    ['Indicizzabilità', (p) => (p.url ? indexabilityOf(p) || 'indicizzabile' : null)],
+    ['X-Robots-Tag', (p) => p.xRobots],
+    ['Dati strutturati', (p) => (p.structuredData ? (p.structuredData.types.join(', ') || 'nessuno') + (p.structuredData.invalid ? ` · ${p.structuredData.invalid} JSON-LD non validi` : '') : null)],
+  ];
+
   function openDetail(key, fromHash = false) {
+    if (single()) return openSingleDetail(key, fromHash);
     const r = state.result;
     if (!r) return;
     const pair = r.pairs.find((p) => p.key === key);
@@ -358,9 +529,6 @@
     const h = pair.headKey ? state.headScan.pages.find((p) => p.key === pair.headKey) : null;
     const bm = metaOf(state.base), hm = metaOf(state.head);
     const findings = r.findings.filter((f) => f.key === key);
-    const list = (a) => (a && a.length ? a.map(esc).join('<br>') : '—');
-    const link = (p) => (p ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a>` : '—');
-    const issues = (p) => (p && p.issues && p.issues.length ? p.issues.map((i) => `<div>${sevBadge(i.severity)} <code>${esc(i.code)}</code> <span class="hint">${esc(i.message)}</span></div>`).join('') : '<span class="hint">nessuna</span>');
     const B = b || {}, Hh = h || {};
 
     const el = $('#detail');
@@ -371,30 +539,10 @@
         <section><h3>Confronto</h3><div class="tablewrap"><table class="cmp">
           <thead><tr><th></th><th>Base · ${esc(fmtDate(state.baseScan.startedAt))}</th><th>Head · ${esc(fmtDate(state.headScan.startedAt))}</th></tr></thead>
           <tbody>
-            <tr><td>URL</td><td class="b">${link(b)}</td><td class="h">${link(h)}</td></tr>
-            ${pageRow('Status', B.error || B.status, Hh.error || Hh.status)}
-            ${pageRow('Redirect', (B.redirects || []).map((x) => `${x.status} → ${x.location}`), (Hh.redirects || []).map((x) => `${x.status} → ${x.location}`), list)}
-            ${pageRow('Content-Type', B.contentType, Hh.contentType)}
-            ${pageRow('Title', B.title, Hh.title)}
-            ${pageRow('Description', B.description, Hh.description)}
-            ${pageRow('H1', B.h1, Hh.h1, list)}
-            ${pageRow('Canonical', B.canonical, Hh.canonical)}
-            ${pageRow('Meta robots', B.robots, Hh.robots)}
-            ${pageRow('Lang', B.lang, Hh.lang)}
-            ${pageRow('Heading', B.headings, Hh.headings, (v) => (v ? Object.entries(v).filter(([, n]) => n).map(([k, n]) => `${k}:${n}`).join(' ') || '—' : '—'))}
-            ${pageRow('Parole', B.wordCount, Hh.wordCount, fmtNum)}
-            ${pageRow('Hash testo', B.textHash, Hh.textHash, (v) => `<code>${esc(v || '—')}</code>`)}
-            ${pageRow('Link interni', B.links?.internal?.length, Hh.links?.internal?.length, fmtNum)}
-            ${pageRow('Link esterni', B.links?.external, Hh.links?.external, fmtNum)}
-            ${pageRow('Immagini (senza alt)', B.images ? `${B.images.total} (${B.images.missingAlt})` : null, Hh.images ? `${Hh.images.total} (${Hh.images.missingAlt})` : null)}
-            ${pageRow('Hreflang', (B.hreflang || []).map((x) => `${x.lang}: ${x.href}`), (Hh.hreflang || []).map((x) => `${x.lang}: ${x.href}`), list)}
-            ${pageRow('OG title', B.og?.title, Hh.og?.title)}
-            ${pageRow('OG image', B.og?.image, Hh.og?.image)}
-            ${pageRow('Tempo risposta', B.responseMs, Hh.responseMs, (v) => (v == null ? '—' : `${fmtNum(v)} ms`), () => true)}
-            ${pageRow('Dimensione HTML', B.bytes, Hh.bytes, fmtBytes, () => true)}
-            ${pageRow('Profondità', B.depth, Hh.depth, (v) => esc(v ?? '—'), () => true)}
+            <tr><td>URL</td><td class="b">${pageLink(b)}</td><td class="h">${pageLink(h)}</td></tr>
+            ${FIELDS.map(([label, get, fmt = plain, noCmp]) => pageRow(label, get(B), get(Hh), fmt, noCmp ? () => true : null)).join('')}
           </tbody></table></div></section>
-        <section><h3>Issue</h3><div class="tablewrap"><table class="cmp"><tbody><tr><td>Issue</td><td class="b">${issues(b)}</td><td class="h">${issues(h)}</td></tr></tbody></table></div></section>
+        <section><h3>Issue</h3><div class="tablewrap"><table class="cmp"><tbody><tr><td>Issue</td><td class="b">${issueList(b && b.issues)}</td><td class="h">${issueList(h && h.issues)}</td></tr></tbody></table></div></section>
         <section id="shotSec"></section>
         <section id="textSec"></section>
       </div>`;
@@ -403,6 +551,56 @@
     document.body.style.overflow = 'hidden';
     renderShots(b, h, bm, hm);
     renderText(pair, bm, hm);
+  }
+
+  function openSingleDetail(key, fromHash = false) {
+    const d = state.diag;
+    if (!d) return;
+    const p = state.baseScan.pages.find((x) => x.key === key);
+    if (!p) { state.page = null; writeHash(); return; }
+    state.page = key;
+    if (!fromHash) state.shot = 'side';
+    writeHash();
+    const bm = metaOf(state.base);
+    const siteIssues = d.siteIssuesByPage[key] || [];
+    const inl = d.inlinks[key] || [];
+    const out = [...new Set(p.links?.internal || [])];
+    const keyList = (keys) => (keys.length ? `<div class="plinks">${keys.slice(0, 200).map((k) => `<span class="plink" data-page="${esc(k)}">${esc(k)}</span>`).join(' ')}${keys.length > 200 ? ` <span class="hint">… altri ${keys.length - 200}</span>` : ''}</div>` : '<span class="hint">nessuno</span>');
+    const el = $('#detail');
+    el.innerHTML = `
+      <header><h2>${esc(key)} ${stBadge(p)}</h2><button class="btn" data-act="close" aria-label="Chiudi">✕</button></header>
+      <div class="body">
+        <section><h3>Issue (${(p.issues || []).length + siteIssues.length})</h3><div class="tablewrap"><table class="cmp"><tbody>
+          <tr><td>Pagina</td><td>${issueList(p.issues)}</td></tr>
+          ${siteIssues.length ? `<tr><td>Sito</td><td>${issueList(siteIssues)}</td></tr>` : ''}
+        </tbody></table></div></section>
+        <section><h3>Dati · ${esc(fmtDate(state.baseScan.startedAt))}</h3><div class="tablewrap"><table class="cmp">
+          <tbody>
+            <tr><td>URL</td><td>${pageLink(p)}</td></tr>
+            ${FIELDS.map(([label, get, fmt = plain]) => `<tr><td>${label}</td><td>${fmt(get(p))}</td></tr>`).join('')}
+          </tbody></table></div></section>
+        <section><h3>Link entranti (${inl.length})</h3>${keyList(inl)}</section>
+        <section><h3>Link interni in uscita (${out.length})</h3>${keyList(out)}</section>
+        <section id="shotSec"></section>
+        <section id="textSec"></section>
+      </div>`;
+    el.hidden = false;
+    $('#scrim').hidden = false;
+    document.body.style.overflow = 'hidden';
+    renderShots(p, null, bm, null);
+    renderSingleText(p, bm);
+  }
+
+  async function renderSingleText(p, bm) {
+    const sec = $('#textSec');
+    if (!bm.hasText) { sec.innerHTML = ''; return; }
+    try {
+      const t = (await load('text', state.site, state.base))[p.key];
+      if (state.page !== p.key) return;
+      sec.innerHTML = t == null ? '' : `<h3>Testo visibile <span class="hint">(${fmtNum(t.split('\n').length)} righe)</span></h3><div class="textdiff">${t.split('\n').map((l) => `<div>${esc(l)}</div>`).join('')}</div>`;
+    } catch (e) {
+      sec.innerHTML = `<h3>Testo</h3><p class="hint">${esc(e.message)}</p>`;
+    }
   }
 
   function closeDetail() {
@@ -525,7 +723,7 @@
 
   // ---- events ----
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-tab],[data-sev],[data-page],[data-act],[data-issue],[data-setbase],[data-sethead],[data-shot]');
+    const t = e.target.closest('[data-tab],[data-sev],[data-page],[data-act],[data-issue],[data-setbase],[data-sethead],[data-single],[data-shot]');
     if (!t) return;
     const d = t.dataset;
     if (d.tab) { state.tab = d.tab; state.limit = 200; render(); return; }
@@ -533,8 +731,10 @@
     if (d.issue) { state.openIssue = state.openIssue === d.issue ? null : d.issue; renderTab(); return; }
     if (d.setbase) { state.base = d.setbase; fillPickers(); compute(); return; }
     if (d.sethead) { state.head = d.sethead; fillPickers(); compute(); return; }
+    if (d.single) { state.base = d.single; state.head = null; fillPickers(); compute(); return; }
     if (d.shot) {
       state.shot = d.shot;
+      if (single()) return;
       const pair = state.result.pairs.find((p) => p.key === state.page);
       const b = pair.baseKey ? state.baseScan.pages.find((p) => p.key === pair.baseKey) : null;
       const h = pair.headKey ? state.headScan.pages.find((p) => p.key === pair.headKey) : null;
@@ -545,7 +745,13 @@
     if (d.act === 'close') { closeDetail(); return; }
     if (d.act === 'more') { state.limit += 500; renderTab(); return; }
     if (d.act && d.act.startsWith('sev:')) {
-      state.tab = 'diff'; state.sev = new Set([d.act.slice(4)]); state.type = ''; render(); return;
+      state.tab = single() ? 'issues' : 'diff'; state.sev = new Set([d.act.slice(4)]); state.type = ''; state.q = ''; render(); return;
+    }
+    if (d.act && d.act.startsWith('status:')) {
+      state.tab = 'pages'; state.pstatus = d.act.slice(7); state.pissue = ''; render(); return;
+    }
+    if (d.act && d.act.startsWith('pissue:')) {
+      state.tab = 'pages'; state.pissue = d.act.slice(7); state.pstatus = ''; render(); return;
     }
     if (d.act && d.act.startsWith('state:')) {
       state.tab = 'pages'; state.pstate = d.act.slice(6); render(); return;
@@ -561,9 +767,12 @@
     const id = e.target.id;
     if (id === 'ftype') { state.type = e.target.value; renderTab(); }
     if (id === 'pstate') { state.pstate = e.target.value; renderTab(); }
+    if (id === 'pstatus') { state.pstatus = e.target.value; state.limit = 200; renderTab(); }
+    if (id === 'icat') { state.icat = e.target.value; renderTab(); }
+    if (id === 'pissue') { state.pissue = e.target.value; state.limit = 200; renderTab(); }
     if (id === 'site') { state.page = null; selectSite(e.target.value); compute(); }
     if (id === 'base') { state.base = e.target.value; compute(); }
-    if (id === 'head') { state.head = e.target.value; compute(); }
+    if (id === 'head') { state.head = e.target.value || null; fillPickers(); compute(); }
     if (id === 'rmap' && e.target.files[0]) {
       const f = e.target.files[0];
       f.text().then((txt) => {
@@ -584,11 +793,57 @@
       compute();
     }
   });
+  $('#pdf').addEventListener('click', exportPdf);
   $('#swap').addEventListener('click', () => {
+    if (single()) return;
     [state.base, state.head] = [state.head, state.base];
     fillPickers();
     compute();
   });
+
+  // ---- PDF ----
+  // Served by `sitescanner ui` the server renders the PDF with Chromium; from file://, from a bundle,
+  // without Playwright or with a redirect map loaded, the same print document goes to the browser's print.
+  async function exportPdf() {
+    if (!state.baseScan) return;
+    const btn = $('#pdf');
+    if (/^https?:$/.test(location.protocol) && !state.redirectMap) {
+      btn.disabled = true;
+      btn.textContent = 'PDF…';
+      try {
+        const q = new URLSearchParams({ site: state.site, base: state.base, ...(state.head ? { head: state.head } : {}) });
+        const r = await fetch('/api/pdf?' + q);
+        if (r.ok && /pdf/.test(r.headers.get('content-type') || '')) {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(await r.blob());
+          a.download = (/filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '') || [])[1] || 'sitescanner.pdf';
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+          return;
+        }
+      } catch { /* no server API: print from the browser */ } finally {
+        btn.disabled = false;
+        btn.textContent = 'PDF';
+      }
+    }
+    printInBrowser();
+  }
+
+  function printInBrowser() {
+    const site = siteOf(state.site);
+    const html = renderPrintHtml({
+      base: state.baseScan, head: single() ? null : state.headScan,
+      compare: { redirectMap: state.redirectMap || {}, ignore: site.compare?.ignore || [], thresholds: site.compare?.thresholds || {} },
+      siteName: site.name, version: INDEX.tool?.version || '',
+    });
+    const w = window.open('', '_blank');
+    if (!w) { alert('Il browser ha bloccato la finestra di stampa: consenti i popup per questa pagina.'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 300);
+  }
 
   function rerenderKeepingFocus(id) {
     const el = document.getElementById(id);
@@ -604,6 +859,7 @@
   const pre = INDEX.preselect || {};
   if (h.tab) state.tab = h.tab;
   state.page = h.page || null;
-  selectSite(h.site || pre.site || (INDEX.sites[0] && INDEX.sites[0].id), h.base || pre.base, h.head || pre.head);
+  const preHead = pre.base && !pre.head ? '' : pre.head;
+  selectSite(h.site || pre.site || (INDEX.sites[0] && INDEX.sites[0].id), h.base || pre.base, h.base ? h.head : preHead);
   compute();
 })();
