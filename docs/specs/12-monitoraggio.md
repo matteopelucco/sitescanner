@@ -189,6 +189,8 @@ Periodi standard: 24 ore, 7 giorni, 30 giorni, 90 giorni, 12 mesi, mese corrente
 
 ## 12.10 Fuori dalla prima versione
 
+Aggiornamento del 2026-10-25: le voci seguenti, insieme ad altre emerse dall'analisi di Checkly, sono specificate in [§13](13-monitoraggio-v2.md).
+
 Previsti in seguito, nell'ordine stimato di valore per chi gestisce molti siti:
 
 1. report mensile PDF per tag (cliente) o per monitor;

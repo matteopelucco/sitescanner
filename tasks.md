@@ -67,6 +67,69 @@ Formato di un task:
 
 <!-- Aggiungi qui i nuovi task, uno per voce, in fondo alla lista. -->
 
+- [ ] **Monitoraggio v2 · 1. Esiti, soglie e azioni sui monitor**: implementare [§13.2](docs/specs/13-monitoraggio-v2.md#132-esiti-soglie-e-azioni-sui-monitor) (RF-RIS-01..08): esiti riuscito/degradato/fallito con le soglie «degradato dopo» e «fallito dopo», silenzia (anche a tempo) distinto da pausa, duplica, descrizione, opzioni della richiesta (redirect, ignora certificato, deve fallire, versione IP), prova prima di salvare. Completo quando la migrazione porta la soglia di lentezza nelle nuove soglie senza cambiare il comportamento dei monitor esistenti (test sui due store), la prova non entra nello storico, un monitor silenziato apre incidenti ma non invia avvisi, e il form è verificato nel browser.
+  - [ ] modello e migrazione (file e Postgres); `displayStatus` con «degradato»; salute aggiornata (RF-RIS-02)
+  - [ ] silenzia/riattiva per monitor, selezione e tag, con scadenza; nessun avviso dai monitor silenziati
+  - [ ] duplica, descrizione (anche negli avvisi), opzioni della richiesta in «Avanzate»
+  - [ ] `POST /api/monitors/test` con configurazione non salvata e anteprima nel form
+  - [ ] specifiche §12/§13 (stato), README
+- [ ] **Monitoraggio v2 · 2. Client HTTP con fasi, asserzioni e check di API**: implementare RF-RIS-20 (fasi DNS, TCP, TLS, primo byte, download) con un client su `node:http(s)` e `guardedLookup`, il valutatore puro delle asserzioni `src/core/assertions.js` e il check di API ([§13.3](docs/specs/13-monitoraggio-v2.md#133-asserzioni-e-check-di-api)). Completo quando status attesi e keyword sono migrati in asserzioni equivalenti, ogni sorgente e confronto ha un test, la somma delle fasi è entro 5 ms dal totale (RNF-43), e il form delle asserzioni è verificato nel browser.
+  - [ ] client HTTP con misura delle fasi, redirect, limiti di corpo, classi d'errore come in RF-MON-11
+  - [ ] `src/core/assertions.js` (status, header, testo, JSON con sottoinsieme di JSONPath, tempo, URL finale) e messaggi «atteso/trovato»
+  - [ ] check di API: metodo, header, corpo, tipo di contenuto
+  - [ ] migrazione di `expect` e `keyword` in asserzioni; form con l'editor delle asserzioni
+- [ ] **Monitoraggio v2 · 3. Dettaglio dei run, percentili ed errori raggruppati**: implementare RF-RIS-21..25 e RF-RIS-23: dettaglio completo dei run (su Blob o file, compresso), conservazione selettiva, periodi e filtri del dettaglio, p50/p95/p99 e grafico delle fasi, gruppi di errori, primo run fallito nell'incidente. Completo quando lo spazio medio per run conservato è sotto 2 KB (RNF-44, misurato in un test), gli header sensibili sono mascherati, e il dettaglio è verificato nel browser con uno storico simulato.
+  - [ ] `mon_runs` al posto di `mon_checks` con migrazione; dettaglio completo su Blob/file con riferimento
+  - [ ] fingerprint dei messaggi e `mon_error_groups`
+  - [ ] aggregati orari con fasi e istogrammi per percentili; KPI p50/p99
+  - [ ] pagina del run, filtri e periodi del dettaglio del monitor
+- [ ] **Monitoraggio v2 · 4. Politica di allerta, cronologia e nuovi problemi**: implementare [§13.7](docs/specs/13-monitoraggio-v2.md#137-allerte-cronologia-e-nuovi-problemi) (RF-ALR-01..08): politica dell'account (N fallimenti o X minuti, percentuale di località), promemoria con numero massimo, tipi di evento per canale, iscrizioni per tag, impostazioni per monitor, cronologia degli eventi, log delle notifiche, vista «Nuovi problemi». Completo quando la valutazione della politica è una funzione pura (`src/core/alerting.js`) coperta da test, la migrazione converte ritardo e promemoria di §12, e le tre pagine sono verificate nel browser.
+  - [ ] `src/core/alerting.js` e integrazione in `notify.js`; migrazione di `notifyDelayMin` e `reminderMin`
+  - [ ] tipi di evento e iscrizioni per tag sui canali; eventi «degradato», «manutenzione iniziata/finita», «heartbeat mancato»
+  - [ ] cronologia degli eventi e log delle notifiche (90 giorni) con filtri
+  - [ ] «Nuovi problemi» con finestra configurabile
+- [ ] **Monitoraggio v2 · 5. Elenco dei monitor professionale**: implementare [§13.8](docs/specs/13-monitoraggio-v2.md#138-elenco-dei-monitor) (RF-LST-01..05): schede con conteggi, periodo dell'elenco, colonne ordinabili, mini-barre degli ultimi 20 run, ricerca con filtri combinabili e viste salvate, menu di riga. Completo quando l'elenco risponde in meno di 1 s con 500 monitor (RNF-42, test con dati simulati), il parser dei filtri è puro e testato, e l'elenco è verificato nel browser anche a larghezza di smartphone.
+  - [ ] API dell'elenco con periodo, ordinamento e filtri lato server
+  - [ ] parser della ricerca (`tag:`, `stato:`, `tipo:`, `salute:`, testo) e viste salvate per utente
+  - [ ] menu di riga e azioni in blocco aggiornate
+- [ ] **Monitoraggio v2 · 6. Heartbeat (cron job)**: implementare RF-TYP-01 e RF-TYP-05: URL segreto `/hb/<token>` con `/start` e `/fail`, periodo e tolleranza, tempo di esecuzione con le soglie, stati, incidenti e notifiche come gli altri monitor. Completo quando ritardo, tolleranza, `/fail` e ripresa sono testati sui due store con un orologio simulato, la rotta pubblica ha un limite di frequenza, e la pagina del monitor mostra le chiamate ricevute.
+  - [ ] modello `mon_heartbeats`, rotta pubblica prima della sessione, limite di frequenza
+  - [ ] valutazione nel giro (scadenze) e tempi di esecuzione
+  - [ ] form e dettaglio con istruzioni copiabili (`curl`, cron)
+- [ ] **Monitoraggio v2 · 7. Monitor DNS, TCP e SSL/dominio**: implementare RF-TYP-02..05: DNS con resolver e asserzioni sui record, TCP con invio e risposta facoltativi, SSL/dominio con catena, nomi, protocollo minimo e scadenza RDAP una volta al giorno. Completo quando ogni tipo è testato con server finti (DNS con un resolver locale, TCP con un server locale, RDAP con un server finto), RF-SEC-01 vale per TCP e SSL, e la scelta del tipo in «Aggiungi monitor» è verificata nel browser.
+  - [ ] esecutori per tipo con gli stessi esiti e classi d'errore
+  - [ ] RDAP con cache giornaliera e avvisi di scadenza del dominio
+  - [ ] scelta del tipo con una riga di spiegazione ciascuno; icone e filtro per tipo
+- [ ] **Monitoraggio v2 · 8. Segreti, variabili e tag manager**: implementare [§13.9](docs/specs/13-monitoraggio-v2.md#139-segreti-variabili-e-tag) (RF-SEG-01..04, RF-TAG-01..02): variabili e segreti cifrati (AES-256-GCM, `SITESCANNER_SECRETS_KEY` con rotazione), `{{NOME}}` nei monitor, sovrascritture per monitor, registro delle modifiche, mascheramento dei valori nei run; tag con descrizione, colore, namespace, rinomina e unione. Completo quando la cifratura e la rotazione della chiave sono testate, nessuna risposta dell'API né dettaglio di run contiene il valore di un segreto (test), e le due pagine sono verificate nel browser.
+  - [ ] modulo di cifratura e store dei segreti (file e Postgres), registro
+  - [ ] sostituzione al momento del run e mascheramento dei valori nei dati salvati
+  - [ ] tag manager con rinomina/unione propagate a monitor, manutenzioni e iscrizioni
+  - [ ] ADR sulla gestione dei segreti
+- [ ] **Monitoraggio v2 · 9. Spazi di lavoro, ruoli e token API**: implementare [§13.10](docs/specs/13-monitoraggio-v2.md#1310-team-e-accesso-programmatico) (RF-TEAM-01..05): spazi personali e condivisi, membri con ruoli (proprietario, editor, lettore), selettore dello spazio, migrazione delle aree personali, token API con permessi e scadenza. Completo quando la migrazione da area a spazio di lavoro è testata sui due backend senza perdita di dati, l'isolamento tra spazi e i permessi dei ruoli sono coperti da test come RF-ISO, e il flusso «invita un collega» è verificato nel browser. Aggiornare §10, ADR-0016/0017 (nuova ADR che le estende).
+  - [ ] modello `workspaces`, `memberships`, `api_tokens`; area = spazio di lavoro
+  - [ ] permessi per ruolo in tutte le API (siti, scan, monitor, canali, segreti)
+  - [ ] migrazione automatica e reversibile con backup
+  - [ ] interfaccia: selettore, membri, token (mostrati una volta)
+- [ ] **Monitoraggio v2 · 10. Retry configurabili e più località**: implementare [§13.6](docs/specs/13-monitoraggio-v2.md#136-retry-e-località) (RF-LOC-01..05): strategie di retry, località come regioni di Vercel (una Function di controllo per regione o un consumer di Queues per regione), rotazione o parallelo con la regola della percentuale, statistiche per località, falsi down di massa per località. Completo quando la logica di scelta delle località e della regola è pura e testata, l'esecuzione multi-località è simulata in locale nei test, e sulla deployment di prova un monitor con tre località produce run da tutte e tre (se manca la deployment: **BLOCCATO** solo per questa verifica). Nuova ADR sull'esecuzione multi-regione.
+  - [ ] retry con backoff e opzioni; tentativi registrati nel run
+  - [ ] Function o consumer per regione con segreto interno; configurazione delle località del deploy
+  - [ ] percentuale di località nella politica di allerta; tabella per località nel dettaglio
+- [ ] **Monitoraggio v2 · 11. Status page, dashboard TV e badge**: implementare [§13.11](docs/specs/13-monitoraggio-v2.md#1311-comunicare-lo-stato-status-page-dashboard-tv-badge) (RF-PUB-01..06): status page pubbliche con componenti, comunicazioni di incidente, manutenzioni pianificate, password facoltativa e `noindex`, dominio personalizzato documentato; dashboard TV con link segreto revocabile; badge SVG. Completo quando un test verifica che status page, badge e dashboard non contengano URL, cause tecniche, IP o header (RF-PUB-03), le pagine pubbliche hanno cache CDN e limite di frequenza, e le tre pagine sono verificate nel browser (status page anche a larghezza di smartphone, dashboard TV a 1920×1080).
+  - [ ] modello `status_pages`, `status_updates`, `share_links`
+  - [ ] rotte pubbliche con cache e invalidazione al cambio di stato
+  - [ ] editor della status page e delle comunicazioni; dashboard TV; badge
+- [ ] **Monitoraggio v2 · 12. Report e PDF per cliente**: implementare [§13.12](docs/specs/13-monitoraggio-v2.md#1312-report) (RF-RPT-01..03): pagina Report con periodo e filtri, CSV, PDF per tag con il motore di stampa di §7.8, report mensile automatico via email. Completo quando i numeri del report coincidono con i KPI di §12.6 per lo stesso periodo (test), il PDF è generato in un test (o dà un errore chiaro senza Chromium, come `pdf`), e l'invio mensile è provato con il Resend finto.
+  - [ ] calcolo del report riusando `monitorKpis`; totali pesati per tag
+  - [ ] documento di stampa del report di disponibilità in `src/core/print.js` o modulo affine
+  - [ ] Cron mensile e iscrizione dei destinatari
+- [ ] **Monitoraggio v2 · 13. Monitoring as code e test da CI**: implementare [§13.13](docs/specs/13-monitoraggio-v2.md#1313-monitoring-as-code-e-test-da-ci) (RF-MAC-01..04): schema YAML documentato (`docs/specs/monitors.schema.json`), API `/api/v1/` con token, `sitescanner monitor apply` con `--dry-run`, monitor «gestiti da codice», «Esporta come codice», `sitescanner monitor test --base-url` con exit code per la CI. Prerequisito: task 9 (token). Completo quando `apply` è idempotente (due esecuzioni → nessuna modifica), il piano è corretto per crea/modifica/elimina, `test` restituisce 1 su un'asserzione fallita (test e2e con il fixture server), e il README ha un esempio di GitHub Actions.
+  - [ ] schema e validazione con errori per riga e campo
+  - [ ] API v1 (monitor, manutenzioni, canali per nome) con token
+  - [ ] diff/piano e applicazione; blocco delle modifiche da interfaccia sui monitor gestiti
+  - [ ] comando `test` con esito per monitor e registrazione nella cronologia
+- [ ] **Monitoraggio v2 · 14. Manutenzione ricorrente e nuovi canali**: implementare RF-MNT-10 (ripeti ogni N giorni/settimane/mesi, data di fine) e RF-CHN-01 (webhook JSON firmato HMAC, Microsoft Teams, Discord). Completo quando le occorrenze sono testate in `src/core/uptime.js` (anche a cavallo dell'ora legale), i tre canali sono testati con server finti (firma del webhook verificata in un test), e il form della manutenzione è verificato nel browser.
+- [ ] **Monitoraggio v2 · 15. Agente locale (località privata)**: implementare RF-AGT-01: `sitescanner monitor agent --token`, coda dei run per l'agente (polling ogni 30 s, nessuna porta in ingresso), località «Privata · nome» nei monitor, battito dell'agente con avviso se si ferma. Completo quando un test avvia deployment (server locale) e agente in due processi e verifica un monitor eseguito solo dall'agente, con risultati, incidenti e notifiche come gli altri. Nuova ADR sul protocollo dell'agente.
+- [ ] **Monitoraggio v2 · 16. Browser check semplice**: implementare RF-BRW-01 con Chromium (Playwright in locale, `@sparticuz/chromium` su Vercel): pagina caricata, elemento presente o testo visibile, nessun errore JavaScript, tempi di caricamento, screenshot del guasto allegato all'incidente, intervallo minimo 15 minuti. Completo quando il check è testato con il fixture server (pagina con errore JS, elemento mancante) se Chromium è disponibile (altrimenti il test è saltato con un messaggio), e i costi sono stimati nel README.
 
 ## Fatto
 

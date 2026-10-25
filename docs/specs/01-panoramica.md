@@ -60,7 +60,7 @@ Casi d'uso tipici:
 **Previsto, specificato e non ancora implementato**
 
 - pubblicazione su Vercel ([§11](11-vercel.md)); l'accesso multi-utente con login e aree private ([§10](10-utenti-e-accesso.md)) è già disponibile in locale;
-- monitoraggio della disponibilità dei siti con avvisi e KPI ([§12](12-monitoraggio.md)).
+- monitoraggio della disponibilità dei siti con avvisi e KPI ([§12](12-monitoraggio.md)) e la sua evoluzione per i team ([§13](13-monitoraggio-v2.md)).
 
 ## 1.4 Requisiti non funzionali
 
