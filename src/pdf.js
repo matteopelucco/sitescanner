@@ -1,5 +1,6 @@
 import { loadSite, validSiteId, UserError } from './config.js';
-import { loadScan, resolveScanRef } from './store.js';
+import { resolveScanRef } from './store.js';
+import { storageFor } from './storage/index.js';
 import { renderPrintHtml } from './core/print.js';
 import { loadPlaywright, launchChromium } from './screenshots.js';
 import { TOOL } from './version.js';
@@ -11,16 +12,16 @@ export const pdfFileName = (site, baseId, headId) => `sitescanner-${site}-${base
  * with headless Chromium. Throws UserError if Playwright or Chromium are not available.
  * @returns {Promise<{buffer: Buffer, baseId: string, headId: string|null, fileName: string}>}
  */
-export async function renderPdf({ site, base, head = null, redirectMap = {} }) {
+export async function renderPdf({ site, base, head = null, redirectMap = {}, storage: st = storageFor() }) {
   if (!validSiteId(site)) throw new UserError(`Id sito non valido: ${site}`);
   if (!base) throw new UserError('Serve la scan Base');
-  const baseId = resolveScanRef(site, base);
-  const headId = head ? resolveScanRef(site, head) : null;
+  const baseId = await resolveScanRef(st, site, base);
+  const headId = head ? await resolveScanRef(st, site, head) : null;
   let cfg = null;
-  try { cfg = loadSite(site); } catch { /* config removed: history is still reportable */ }
+  try { cfg = await loadSite(st, site); } catch { /* config removed: history is still reportable */ }
   const html = renderPrintHtml({
-    base: loadScan(site, baseId),
-    head: headId ? loadScan(site, headId) : null,
+    base: await st.loadScan(site, baseId),
+    head: headId ? await st.loadScan(site, headId) : null,
     compare: { redirectMap, ignore: cfg ? cfg.compare.ignore : [], thresholds: cfg ? cfg.compare.thresholds : {} },
     siteName: cfg ? cfg.name : '',
     version: TOOL.version,

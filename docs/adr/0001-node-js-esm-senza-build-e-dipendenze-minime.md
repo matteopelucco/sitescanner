@@ -27,7 +27,7 @@ sitescanner è un tool CLI da usare in locale e in CI, che deve anche produrre u
 
 Opzione scelta (implementata nella 0.1.0, da confermare): "Node.js con ES modules e JavaScript puro, senza build", perché lo stesso linguaggio gira nella CLI e nel report, e il runtime moderno fornisce già `fetch`, `parseArgs`, `node:test`.
 
-Dipendenze: `yaml` (configurazione), `node-html-parser` (analisi HTML), `pngjs` + `pixelmatch` (diff visivo). `playwright` è una dipendenza **opzionale** caricata con `import()` dinamico: se manca o Chromium non parte, la scan prosegue senza screenshot.
+Dipendenze: `yaml` (configurazione), `node-html-parser` (analisi HTML), `pngjs` + `pixelmatch` (diff visivo). `playwright` è una dipendenza **opzionale** caricata con `import()` dinamico: se manca o Chromium non parte, la scan prosegue senza screenshot. Dal 2026-10-25 anche `undici` (il client HTTP del `fetch` di Node), caricato con `import()` solo in modalità multi-utente per controllare l'indirizzo effettivamente connesso dalle scan ([ADR-0016](0016-accesso-multi-utente-con-sessioni-opache-e-password-scrypt-s.md)). Per il backend Vercel ([ADR-0017](0017-storage-a-backend-intercambiabili-filesystem-in-locale-postg.md)) si aggiungono, come dipendenze opzionali caricate con `import()` solo su Vercel, `postgres`, `@vercel/blob`, `@vercel/functions`, `@vercel/queue`, `playwright-core` e `@sparticuz/chromium`; `@electric-sql/pglite` è solo di sviluppo, per i test.
 
 ### Conseguenze
 

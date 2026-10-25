@@ -19,7 +19,12 @@ async function api(method, path, body) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  // Multi-user mode: an expired session goes back to the login page
+  if (res.status === 401 && path !== 'login') {
+    location.href = `/login?next=${encodeURIComponent(location.pathname + location.hash)}`;
+    return new Promise(() => {});
+  }
+  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status, mustChangePassword: !!data.mustChangePassword });
   return data;
 }
 
@@ -134,6 +139,28 @@ function onJob(j) {
 }
 
 function connectEvents() {
+  // On Vercel jobs run in other function instances: their progress is read from the API (RF-RUN-05).
+  if (state.info && state.info.polling) {
+    const poll = async () => {
+      try {
+        const list = await api('GET', 'jobs');
+        const first = !state.jobsLoaded;
+        state.jobsLoaded = true;
+        if (first) {
+          state.jobs = list;
+          renderJobBoxes();
+        } else for (const j of [...list].reverse()) onJob(j);
+      } catch { /* retried at the next tick */ }
+      clearTimeout(state.pollTimer);
+      state.pollTimer = setTimeout(poll, runningJobs().length ? 2000 : 10000);
+    };
+    state.pollNow = () => {
+      clearTimeout(state.pollTimer);
+      state.pollTimer = setTimeout(poll, 1000);
+    };
+    poll();
+    return;
+  }
   const es = new EventSource('/api/events');
   es.addEventListener('jobs', (e) => {
     state.jobs = JSON.parse(e.data);
@@ -146,6 +173,7 @@ function connectEvents() {
 async function startJob(params) {
   const j = await api('POST', 'jobs', params);
   onJob(j);
+  if (state.pollNow) state.pollNow();
   return j;
 }
 
@@ -153,6 +181,7 @@ async function startJob(params) {
 const app = () => $('#app');
 
 function setView(name, extra = {}) {
+  if (state.view && state.view.stop) state.view.stop();
   state.view = { name, ...extra };
   for (const a of $$('[data-nav]')) a.classList.toggle('on', a.dataset.nav === name);
 }
@@ -166,7 +195,8 @@ async function viewSites() {
   setView('sites', { refresh: () => viewSites() });
   const info = state.info = await api('GET', 'state');
   $('#ver').textContent = info.tool.version;
-  $('#root').textContent = info.root;
+  $('#root').textContent = info.root || '';
+  $('#rootwrap').hidden = !info.root;
   const cards = info.sites.map((s) => {
     const last = s.lastScan;
     const envs = Object.entries(s.envs);
@@ -185,7 +215,7 @@ async function viewSites() {
     </div>`;
   }).join('');
   app().innerHTML = `
-    <div class="head"><div><h1>Siti</h1><div class="sub">Configurazioni in <span class="mono">sites/</span>, storico delle scan in <span class="mono">data/</span></div></div>
+    <div class="head"><div><h1>Siti</h1><div class="sub">${multi() ? 'I tuoi siti: visibili solo a te' : 'Configurazioni in <span class="mono">sites/</span>, storico delle scan in <span class="mono">data/</span>'}</div></div>
       <div class="row"><a class="btn" href="#/inventory">Nuovo inventario</a><a class="btn primary" href="#/new">+ Nuovo sito</a></div></div>
     <div data-jobs="running"></div>
     ${info.sites.length ? `<div class="cards">${cards}</div>` : '<div class="panel empty">Nessun sito configurato. <a href="#/new">Crea il primo sito</a> oppure lancia un <a href="#/inventory">inventario</a> su un URL qualsiasi.</div>'}`;
@@ -218,6 +248,7 @@ async function viewSite(id, tab = 'scans') {
   for (const b of $$('[data-tab]')) b.onclick = () => { location.hash = `#/site/${encodeURIComponent(id)}${b.dataset.tab === 'scans' ? '' : `/${b.dataset.tab}`}`; };
   const del = $('#delSite');
   if (del) del.onclick = () => deleteSiteDialog(d);
+  siteMonitors(d);
 }
 
 // Deleting a site asks explicitly what to do with its history (RF-WEB-07).
@@ -829,6 +860,682 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+
+// ---- accounts (multi-user mode, spec §10) ----
+const multi = () => !!(state.info && state.info.mode === 'multi');
+const me = () => (state.info && state.info.user) || null;
+const ROLE = { admin: 'Admin', user: 'Utente' };
+
+function renderAccount() {
+  const u = me();
+  $('#account').hidden = !u;
+  $('[data-nav="users"]').hidden = !(u && u.role === 'admin');
+  if (!u) return;
+  $('#account').innerHTML = `<a href="#/profile" data-nav="profile">${esc(u.name || u.username)}</a><button class="btn small" id="logout">Esci</button>`;
+  $('#logout').onclick = async () => {
+    await api('POST', 'logout', {}).catch(() => {});
+    location.href = '/login';
+  };
+}
+
+/** Modal form; resolves with the FormData on submit, null if cancelled. `check(fd)` returns an error or null. */
+function formDialog({ title, body, confirm = 'Salva', danger = false, cancel = true, check = null, submit = null }) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'dialog';
+    dlg.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2>${body}<p class="formerr" data-err hidden></p>
+      <div class="row end">${cancel ? '<button type="button" class="btn" data-x>Annulla</button>' : ''}<button class="btn ${danger ? 'danger' : 'primary'}" value="ok">${esc(confirm)}</button></div></form>`;
+    document.body.appendChild(dlg);
+    const form = dlg.querySelector('form');
+    const err = dlg.querySelector('[data-err]');
+    if (cancel) dlg.querySelector('[data-x]').onclick = () => dlg.close('');
+    else dlg.addEventListener('cancel', (e) => e.preventDefault());
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const problem = check ? check(fd) : null;
+      if (problem) {
+        err.textContent = problem;
+        err.hidden = false;
+        return;
+      }
+      if (submit) {
+        try {
+          await submit(fd);
+        } catch (x) {
+          err.textContent = x.message;
+          err.hidden = false;
+          return;
+        }
+      }
+      dlg.remove();
+      resolve(fd);
+    });
+    dlg.addEventListener('close', () => {
+      if (dlg.isConnected) {
+        dlg.remove();
+        resolve(null);
+      }
+    });
+    dlg.showModal();
+  });
+}
+
+const passwordFields = (current) => `
+  ${current ? '<label class="f"><span>Password attuale</span><input type="password" name="current" autocomplete="current-password" required></label>' : ''}
+  <label class="f"><span>Nuova password</span><input type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required><small>Da 12 a 128 caratteri. Una frase lunga è più sicura di una parola complicata.</small></label>
+  <label class="f"><span>Ripeti la nuova password</span><input type="password" name="password2" autocomplete="new-password" required></label>`;
+const samePasswords = (fd) => (fd.get('password') !== fd.get('password2') ? 'Le due password non coincidono' : null);
+
+/** RF-USR-05: a temporary password must be changed before using the app. */
+async function forcePasswordChange() {
+  await formDialog({
+    title: 'Scegli una nuova password',
+    body: '<p>La password che stai usando è temporanea: prima di continuare scegline una tua.</p>' + passwordFields(true),
+    confirm: 'Cambia password',
+    cancel: false,
+    check: samePasswords,
+    submit: (fd) => api('PUT', 'me/password', { current: fd.get('current'), password: fd.get('password') }),
+  });
+  location.reload();
+}
+
+/** Shows a generated password once (RF-ADM-01). */
+function showSecret(title, text, password) {
+  return formDialog({
+    title,
+    body: `<p>${esc(text)}</p><div class="secret">${esc(password)}</div><p class="small muted">Non verrà più mostrata: comunicala all'utente in modo sicuro. Al primo accesso dovrà cambiarla.</p>
+      <div class="row"><button type="button" class="btn small" data-copy>Copia</button></div>`,
+    confirm: 'Fatto',
+    cancel: false,
+  }).then(() => {});
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const s = b.closest('form').querySelector('.secret');
+  navigator.clipboard.writeText(s.textContent).then(() => { b.textContent = 'Copiata'; }, () => {});
+});
+
+async function viewProfile() {
+  setView('profile', { refresh: () => viewProfile() });
+  const { user, sessions } = await api('GET', 'me');
+  app().innerHTML = `
+    <div class="head"><div><h1>Profilo</h1><div class="sub mono">${esc(user.username)} · ${esc(ROLE[user.role])}</div></div></div>
+    <div class="grid2">
+      <form class="card form" id="pname"><h2>Nome visualizzato</h2>
+        <label class="f"><span>Nome</span><input type="text" name="name" maxlength="80" value="${esc(user.name)}"></label>
+        <div class="row"><button class="btn primary">Salva</button></div></form>
+      <form class="card form" id="ppass"><h2>Password</h2>${passwordFields(true)}<p class="formerr" data-err hidden></p>
+        <div class="row"><button class="btn primary">Cambia password</button></div></form>
+      <div class="card"><h2>Sessioni</h2><p>Sessioni attive: <b>${fmtNum(sessions)}</b> (questo browser compreso).</p>
+        <div class="row"><button class="btn danger" id="pall">Esci da tutti i dispositivi</button></div></div>
+    </div>`;
+  $('#pname').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api('PUT', 'me', { name: e.target.name.value });
+      state.info.user = r.user;
+      renderAccount();
+      toast('Nome salvato');
+    } catch (x) { toast(x.message, true); }
+  };
+  $('#ppass').onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const err = $('[data-err]', e.target);
+    const problem = samePasswords(fd);
+    err.hidden = !problem;
+    err.textContent = problem || '';
+    if (problem) return;
+    try {
+      await api('PUT', 'me/password', { current: fd.get('current'), password: fd.get('password') });
+      e.target.reset();
+      toast('Password cambiata: le altre sessioni sono state chiuse');
+      viewProfile();
+    } catch (x) {
+      err.textContent = x.message;
+      err.hidden = false;
+    }
+  };
+  $('#pall').onclick = async () => {
+    const ok = await formDialog({ title: 'Uscire da tutti i dispositivi?', body: '<p>Tutte le sessioni, compresa questa, vengono chiuse: dovrai accedere di nuovo.</p>', confirm: 'Esci ovunque', danger: true });
+    if (!ok) return;
+    await api('POST', 'logout-all', {});
+    location.href = '/login';
+  };
+}
+
+const AUDIT = {
+  login: 'Accesso', 'login-failed': 'Accesso fallito', 'login-blocked': 'Accesso bloccato (troppi tentativi)', 'logout-all': 'Uscita da tutti i dispositivi',
+  'password-changed': 'Password cambiata', 'password-reset': 'Password reimpostata', 'user-created': 'Utente creato', 'user-deleted': 'Utente eliminato',
+  'user-disabled': 'Utente disattivato', 'user-enabled': 'Utente riattivato', 'role-changed': 'Ruolo cambiato',
+};
+
+async function viewUsers() {
+  setView('users', { refresh: () => viewUsers() });
+  const [users, audit] = await Promise.all([api('GET', 'users'), api('GET', 'audit')]);
+  const self = me();
+  const rows = users.map((u) => `<tr>
+      <td><b class="mono">${esc(u.username)}</b>${u.name ? `<div class="small muted">${esc(u.name)}</div>` : ''}</td>
+      <td>${esc(ROLE[u.role])}</td>
+      <td>${u.active ? '<span class="tag ok">attivo</span>' : '<span class="tag">disattivato</span>'}${u.mustChangePassword ? ' <span class="tag warn">password temporanea</span>' : ''}</td>
+      <td class="num">${fmtNum(u.sites)}</td><td class="num">${fmtNum(u.scans)}</td>
+      <td>${u.lastLoginAt ? esc(fmtDate(u.lastLoginAt)) : '<span class="muted">mai</span>'}</td>
+      <td><div class="row">
+        <button class="btn small" data-reset="${esc(u.username)}">Reimposta password</button>
+        <button class="btn small" data-role="${esc(u.username)}" data-to="${u.role === 'admin' ? 'user' : 'admin'}">${u.role === 'admin' ? 'Rendi utente' : 'Rendi admin'}</button>
+        <button class="btn small" data-active="${esc(u.username)}" data-to="${u.active ? 'false' : 'true'}">${u.active ? 'Disattiva' : 'Riattiva'}</button>
+        ${u.username === self.username ? '' : `<button class="btn small danger" data-del="${esc(u.username)}" data-sites="${u.sites}" data-scans="${u.scans}">Elimina…</button>`}
+      </div></td></tr>`).join('');
+  app().innerHTML = `
+    ${(state.info.warnings || []).map((w) => `<div class="notice warn">${esc(w)}</div>`).join('')}
+    <div class="head"><div><h1>Utenti</h1><div class="sub">Gli admin gestiscono gli account; i siti di ogni utente restano privati.</div></div>
+      <div class="row"><button class="btn primary" id="unew">+ Nuovo utente</button></div></div>
+    <div class="panel tablewrap"><table><thead><tr><th>Utente</th><th>Ruolo</th><th>Stato</th><th class="num">Siti</th><th class="num">Scan</th><th>Ultimo accesso</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <h2 style="margin-top:24px">Registro di accesso</h2>
+    <div class="panel tablewrap"><table><thead><tr><th>Data</th><th>Azione</th><th>Autore</th><th>Utente</th><th>IP</th></tr></thead><tbody>
+      ${audit.map((a) => `<tr><td>${esc(fmtDate(a.at))}</td><td>${esc(AUDIT[a.action] || a.action)}${a.detail ? ` <span class="muted small">${esc(a.detail)}</span>` : ''}</td><td class="mono">${esc(a.actor || '—')}</td><td class="mono">${esc(a.target || '')}</td><td class="mono small">${esc(a.ip || '')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nessuna voce</td></tr>'}
+    </tbody></table></div>`;
+
+  $('#unew').onclick = async () => {
+    let created = null;
+    const fd = await formDialog({
+      title: 'Nuovo utente',
+      body: `<label class="f"><span>Username</span><input type="text" name="username" required pattern="[a-z0-9][a-z0-9._\\-]{2,31}" autocapitalize="none" spellcheck="false"><small>3–32 caratteri: a-z, 0-9, ".", "_", "-". Non si può cambiare.</small></label>
+        <label class="f"><span>Nome visualizzato</span><input type="text" name="name" maxlength="80"></label>
+        <label class="f"><span>Ruolo</span><select name="role"><option value="user">Utente</option><option value="admin">Admin</option></select></label>
+        <label class="f"><span>Password iniziale</span><input type="password" name="password" autocomplete="new-password"><small>Vuota: ne viene generata una. In ogni caso è temporanea.</small></label>`,
+      confirm: 'Crea',
+      submit: async (f) => { created = await api('POST', 'users', { username: f.get('username').trim().toLowerCase(), name: f.get('name'), role: f.get('role'), password: f.get('password') || null }); },
+    });
+    if (!fd) return;
+    if (created.password) await showSecret('Utente creato', `Password temporanea di ${created.user.username}:`, created.password);
+    else toast('Utente creato');
+    viewUsers();
+  };
+  for (const b of $$('[data-reset]')) b.onclick = async () => {
+    const name = b.dataset.reset;
+    const ok = await formDialog({ title: `Reimpostare la password di ${name}?`, body: '<p>Viene generata una password temporanea e tutte le sessioni dell\'utente vengono chiuse.</p>', confirm: 'Reimposta' });
+    if (!ok) return;
+    try {
+      const r = await api('POST', `users/${encodeURIComponent(name)}/reset-password`, {});
+      await showSecret('Password reimpostata', `Nuova password temporanea di ${name}:`, r.password);
+      viewUsers();
+    } catch (x) { toast(x.message, true); }
+  };
+  for (const b of $$('[data-role]')) b.onclick = async () => {
+    try {
+      await api('PUT', `users/${encodeURIComponent(b.dataset.role)}`, { role: b.dataset.to });
+      toast('Ruolo cambiato');
+      viewUsers();
+    } catch (x) { toast(x.message, true); }
+  };
+  for (const b of $$('[data-active]')) b.onclick = async () => {
+    const enable = b.dataset.to === 'true';
+    if (!enable) {
+      const ok = await formDialog({ title: `Disattivare ${b.dataset.active}?`, body: '<p>L\'utente non potrà più accedere e le sue sessioni vengono chiuse; i job in corso vengono annullati. I suoi dati restano.</p>', confirm: 'Disattiva', danger: true });
+      if (!ok) return;
+    }
+    try {
+      await api('PUT', `users/${encodeURIComponent(b.dataset.active)}`, { active: enable });
+      toast(enable ? 'Utente riattivato' : 'Utente disattivato');
+      viewUsers();
+    } catch (x) { toast(x.message, true); }
+  };
+  for (const b of $$('[data-del]')) b.onclick = async () => {
+    const name = b.dataset.del;
+    const fd = await formDialog({
+      title: `Eliminare l'utente ${name}?`,
+      body: `<p>Vengono cancellati definitivamente l'account e <b>tutta la sua area</b>: ${fmtNum(b.dataset.sites)} siti e ${fmtNum(b.dataset.scans)} scan, con screenshot, label e inventari.</p>
+        <label class="f"><span>Per confermare scrivi lo username</span><input type="text" name="confirm" autocomplete="off" required></label>`,
+      confirm: 'Elimina definitivamente',
+      danger: true,
+      check: (f) => (f.get('confirm').trim() !== name ? 'Lo username non coincide' : null),
+      submit: () => api('DELETE', `users/${encodeURIComponent(name)}`),
+    });
+    if (!fd) return;
+    toast(`Utente ${name} eliminato`);
+    viewUsers();
+  };
+}
+
+// ---- monitoring (spec §12) ----
+const MSTATUS = { up: ['su', 'ok'], slow: ['lento', 'warn'], down: ['giù', 'error'], paused: ['in pausa', ''], maintenance: ['in manutenzione', 'info'], pending: ['in attesa', ''] };
+const HEALTH = { buona: 'ok', attenzione: 'warn', critica: 'error' };
+const monitoringOn = () => !!(state.info && state.info.monitoring);
+const pct = (p) => (p == null ? '—' : `${p.toFixed(2).replace('.', ',')}%`);
+const dur = (ms) => {
+  if (ms == null) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} h${m % 60 ? ` ${m % 60} min` : ''}`;
+  return `${Math.floor(h / 24)} g${h % 24 ? ` ${h % 24} h` : ''}`;
+};
+const mstatusTag = (s) => `<span class="tag ${MSTATUS[s][1]}">${MSTATUS[s][0]}</span>`;
+const healthTag = (h) => `<span class="tag ${HEALTH[h.level]}" data-tip="${esc(h.reasons.length ? h.reasons.join('<br>') : 'Nessun problema negli ultimi 30 giorni')}">${h.level}</span>`;
+const pctClass = (p) => (p == null ? 'none' : p >= 99.9 ? 'good' : p >= 99 ? 'mid' : 'bad');
+
+// 90 days as bars, one per day (RF-KPI-02)
+function bars90(days, now) {
+  const map = new Map(days.map((d) => [d.t, d.pct]));
+  const start = Math.floor(now / 864e5) * 864e5 - 89 * 864e5;
+  const cells = [];
+  for (let i = 0; i < 90; i++) {
+    const t = start + i * 864e5;
+    const p = map.get(t);
+    cells.push(`<rect x="${i * 3}" y="0" width="2" height="18" class="u-${pctClass(p ?? null)}"><title>${new Date(t).toLocaleDateString('it-IT')}: ${p == null ? 'nessun dato' : pct(p)}</title></rect>`);
+  }
+  return `<svg class="bars90" viewBox="0 0 270 18" preserveAspectRatio="none" role="img" aria-label="Disponibilità degli ultimi 90 giorni">${cells.join('')}</svg>`;
+}
+
+// last 24 hours: one cell per hour
+function spark24(hours) {
+  if (!hours.length) return '<span class="muted small">—</span>';
+  return `<svg class="spark24" viewBox="0 0 ${hours.length * 4} 12" preserveAspectRatio="none">${hours.map((h, i) => `<rect x="${i * 4}" y="0" width="3" height="12" class="u-${pctClass(h.pct)}"><title>${new Date(h.t).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}: ${pct(h.pct)}${h.avgMs ? ` · ${h.avgMs} ms` : ''}</title></rect>`).join('')}</svg>`;
+}
+
+// response time line with the downtime hours in red (RF-KPI-05)
+function responseChart(points) {
+  const pts = points.filter((p) => p.avgMs != null);
+  if (pts.length < 2) return '<p class="muted">Dati insufficienti: il grafico compare dopo qualche ora di controlli.</p>';
+  const w = 700, h = 140, t0 = points[0].t, t1 = points[points.length - 1].t || t0 + 1;
+  const max = Math.max(...pts.map((p) => p.p95Ms || p.avgMs)) * 1.1;
+  const x = (t) => ((t - t0) / Math.max(1, t1 - t0)) * w;
+  const y = (v) => h - (v / max) * h;
+  const down = points.filter((p) => p.downtimeMs > 0).map((p) => `<rect x="${x(p.t)}" y="0" width="${Math.max(2, w / points.length)}" height="${h}" class="downband"><title>${new Date(p.t).toLocaleString('it-IT')}: giù ${dur(p.downtimeMs)}</title></rect>`).join('');
+  return `<svg class="rchart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${down}
+    <polyline class="p95" points="${pts.filter((p) => p.p95Ms).map((p) => `${x(p.t)},${y(p.p95Ms)}`).join(' ')}"/>
+    <polyline class="avg" points="${pts.map((p) => `${x(p.t)},${y(p.avgMs)}`).join(' ')}"/></svg>
+    <div class="legend"><span><i class="l-avg"></i>media</span><span><i class="l-p95"></i>p95</span><span><i class="l-down"></i>ore con downtime</span><span class="muted">max ${Math.round(max)} ms</span></div>`;
+}
+
+function monitorForm(m = {}) {
+  const k = m.keyword || {};
+  const headers = Object.entries(m.headers || {}).map(([a, b]) => `${a}: ${b}`).join('\n');
+  return `
+    <label class="f"><span>URL</span><input type="url" name="url" required value="${esc(m.url || '')}" placeholder="https://www.esempio.it/"></label>
+    <label class="f"><span>Nome</span><input type="text" name="name" maxlength="80" value="${esc(m.name || '')}" placeholder="dal dominio, se vuoto"></label>
+    <details class="adv"><summary>Avanzate</summary><div class="fields">
+      <label class="f"><span>Intervallo</span><select name="intervalMin">${[5, 10, 15, 30, 60].map((v) => `<option value="${v}"${(m.intervalMin || 5) === v ? ' selected' : ''}>ogni ${v} min</option>`).join('')}</select></label>
+      <label class="f"><span>Timeout (s)</span><input type="number" name="timeoutS" min="5" max="60" value="${m.timeoutS || 30}"></label>
+      <label class="f"><span>Metodo</span><select name="method"><option${m.method !== 'HEAD' ? ' selected' : ''}>GET</option><option${m.method === 'HEAD' ? ' selected' : ''}>HEAD</option></select></label>
+      <label class="f"><span>Status attesi</span><input type="text" name="expect" value="${esc(m.expect || '200-399')}"></label>
+      <label class="f wide"><span>Keyword</span><input type="text" name="kwText" value="${esc(k.text || '')}" placeholder="testo da cercare nella pagina"></label>
+      <label class="f"><span>La keyword</span><select name="kwMode"><option value="present"${k.mode !== 'absent' ? ' selected' : ''}>deve comparire</option><option value="absent"${k.mode === 'absent' ? ' selected' : ''}>non deve comparire</option></select></label>
+      <label class="check"><input type="checkbox" name="kwCase"${k.caseInsensitive !== false ? ' checked' : ''}> ignora maiuscole</label>
+      <label class="f"><span>Soglia di lentezza (ms)</span><input type="number" name="slowMs" min="1" value="${m.slowMs || ''}"></label>
+      <label class="check"><input type="checkbox" name="notifySlow"${m.notifySlow ? ' checked' : ''}> avvisa quando è lento</label>
+      <label class="f"><span>Avvisi certificato (giorni)</span><input type="text" name="sslDays" value="${esc((m.sslDays || [30, 14, 7, 1]).join(', '))}"></label>
+      <label class="f"><span>Ritardo di notifica (min)</span><input type="number" name="notifyDelayMin" min="0" value="${m.notifyDelayMin || 0}"></label>
+      <label class="f"><span>Promemoria ogni (min)</span><input type="number" name="reminderMin" min="15" value="${m.reminderMin || ''}" placeholder="disattivato"></label>
+      <label class="f"><span>Obiettivo SLA (%)</span><input type="number" name="slaPct" step="0.01" min="90" max="100" value="${m.slaPct || 99.9}"></label>
+      <label class="f wide"><span>Tag (separati da virgola)</span><input type="text" name="tags" value="${esc((m.tags || []).join(', '))}" placeholder="cliente, server…"></label>
+      <label class="f"><span>Basic auth: utente</span><input type="text" name="authUser" value="${esc(m.auth?.username || '')}" autocomplete="off"></label>
+      <label class="f"><span>Basic auth: password</span><input type="password" name="authPass" value="${esc(m.auth?.password || '')}" autocomplete="new-password"></label>
+      <label class="f wide"><span>Header (uno per riga, «Nome: valore»)</span><textarea name="headers" rows="2">${esc(headers)}</textarea></label>
+      ${(state.channels || []).length ? `<fieldset class="f wide"><span>Canali di notifica (nessuno selezionato = tutti)</span><div class="row">${state.channels.map((c) => `<label class="check"><input type="checkbox" name="channels" value="${esc(c.id)}"${(m.channels || []).includes(c.id) ? ' checked' : ''}> ${esc(c.name)}</label>`).join('')}</div></fieldset>` : ''}
+    </div></details>`;
+}
+
+function readMonitorForm(fd) {
+  const headers = {};
+  for (const l of lines(fd.get('headers'))) {
+    const i = l.indexOf(':');
+    if (i > 0) headers[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+  }
+  return {
+    url: fd.get('url').trim(), name: fd.get('name').trim(), intervalMin: Number(fd.get('intervalMin')), timeoutS: Number(fd.get('timeoutS')),
+    method: fd.get('method'), expect: fd.get('expect'), slowMs: intOrNull(fd.get('slowMs')), notifySlow: fd.get('notifySlow') === 'on',
+    keyword: fd.get('kwText').trim() ? { text: fd.get('kwText').trim(), mode: fd.get('kwMode'), caseInsensitive: fd.get('kwCase') === 'on' } : null,
+    sslDays: String(fd.get('sslDays')).split(/[,\s]+/).filter(Boolean).map(Number), notifyDelayMin: Number(fd.get('notifyDelayMin') || 0),
+    reminderMin: intOrNull(fd.get('reminderMin')), slaPct: Number(fd.get('slaPct')), tags: String(fd.get('tags')).split(',').map((t) => t.trim()).filter(Boolean),
+    auth: fd.get('authUser').trim() ? { username: fd.get('authUser').trim(), password: fd.get('authPass') } : null, headers,
+    channels: fd.getAll('channels').length ? fd.getAll('channels') : null,
+  };
+}
+
+async function editMonitorDialog(m = null) {
+  let saved = null;
+  state.channels = await api('GET', 'channels').then((x) => x.channels.filter((c) => c.status !== 'pending')).catch(() => []);
+  const fd = await formDialog({
+    title: m ? `Modifica «${m.name}»` : 'Aggiungi monitor',
+    body: monitorForm(m || {}),
+    confirm: m ? 'Salva' : 'Aggiungi e controlla',
+    submit: async (f) => { saved = m ? await api('PUT', `monitors/${m.id}`, { ...m, ...readMonitorForm(f) }) : await api('POST', 'monitors', readMonitorForm(f)); },
+  });
+  if (!fd) return null;
+  toast(m ? 'Monitor salvato' : `Monitor aggiunto: ${MSTATUS[saved.status] ? MSTATUS[saved.status][0] : saved.status}`);
+  return saved;
+}
+
+function readMonFilter() {
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  return { tag: q.get('tag') || '', status: q.get('status') || '', health: q.get('health') || '', q: q.get('q') || '' };
+}
+
+function writeMonFilter(f) {
+  const q = new URLSearchParams(Object.entries(f).filter(([, v]) => v));
+  history.replaceState(null, '', `#/monitoring${q.toString() ? `?${q}` : ''}`);
+}
+
+async function viewMonitoring() {
+  const d = await api('GET', 'monitoring');
+  setView('monitoring', { refresh: () => {} });
+  const filter = readMonFilter();
+  const selected = new Set();
+  const visible = () => d.monitors.filter((m) => (!filter.tag || m.tags.includes(filter.tag)) && (!filter.status || m.status === filter.status) && (!filter.health || m.health.level === filter.health)
+    && (!filter.q || `${m.name} ${m.url}`.toLowerCase().includes(filter.q.toLowerCase())));
+  const draw = () => {
+    const list = visible();
+    const count = (k, v) => list.filter((m) => m[k] === v || (k === 'health' && m.health.level === v)).length;
+    // RF-KPI-02/04: portfolio availability weighted on monitored time, for the shown group
+    const mon = list.reduce((s, m) => s + m.k30.monitoredMs, 0), dt = list.reduce((s, m) => s + m.k30.downtimeMs, 0);
+    const portfolio = mon ? (dt ? Math.min(Math.floor((1 - dt / mon) * 10000) / 100, 99.99) : 100) : null;
+    $('#monStats').innerHTML = [
+      stat('Su', fmtNum(count('status', 'up') + count('status', 'slow')), count('status', 'slow') ? `di cui ${count('status', 'slow')} lenti` : ''),
+      stat('Giù', `<span class="${count('status', 'down') ? 'sev-e' : ''}">${fmtNum(count('status', 'down'))}</span>`),
+      stat('In pausa / manutenzione', `${count('status', 'paused')} / ${count('status', 'maintenance')}`),
+      stat('Salute', `<span class="sev-e">${count('health', 'critica')}</span> · <span class="sev-w">${count('health', 'attenzione')}</span> · ${count('health', 'buona')}`, 'critica · attenzione · buona'),
+      stat('Disponibilità 30 giorni', pct(portfolio), filter.tag ? `gruppo «${esc(filter.tag)}»` : 'tutti i monitor mostrati'),
+    ].join('');
+    $('#monList').innerHTML = list.length ? `<table class="montable"><thead><tr><th><input type="checkbox" id="selAll" aria-label="Seleziona tutti"></th><th>Monitor</th><th>Stato</th><th>Salute</th><th class="num">30 giorni</th><th class="num">Risposta</th><th>Ultimi 90 giorni</th><th>24 ore</th></tr></thead><tbody>
+      ${list.map((m) => `<tr>
+        <td><input type="checkbox" data-sel="${esc(m.id)}"${selected.has(m.id) ? ' checked' : ''} aria-label="Seleziona"></td>
+        <td><a href="#/monitor/${encodeURIComponent(m.id)}"><b>${esc(m.name)}</b></a><div class="small muted mono">${esc(m.url)}</div>${m.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join(' ')}</td>
+        <td>${mstatusTag(m.status)}<div class="small muted">da ${dur(d.now - (m.state.since || d.now))}</div></td>
+        <td>${healthTag(m.health)}</td>
+        <td class="num">${pct(m.k30.availability)}${m.k30.coverage != null && m.k30.coverage < 0.99 ? `<div class="small muted" data-tip="Tempo effettivamente monitorato sul periodo">copertura ${Math.round(m.k30.coverage * 100)}%</div>` : ''}</td>
+        <td class="num">${m.k30.response ? `${m.k30.response.avg} ms` : '—'}</td>
+        <td>${bars90(m.last90, d.now)}</td><td>${spark24(m.last24)}</td></tr>`).join('')}</tbody></table>`
+      : `<p class="empty">${d.monitors.length ? 'Nessun monitor con questi filtri.' : 'Nessun monitor. Aggiungi il primo sito da tenere d\'occhio.'}</p>`;
+    $('#bulkBar').hidden = !selected.size;
+    $('#bulkCount').textContent = `${selected.size} selezionati`;
+    for (const c of $$('[data-sel]')) c.onchange = () => { c.checked ? selected.add(c.dataset.sel) : selected.delete(c.dataset.sel); $('#bulkBar').hidden = !selected.size; $('#bulkCount').textContent = `${selected.size} selezionati`; };
+    const all = $('#selAll');
+    if (all) all.onchange = () => { for (const m of list) all.checked ? selected.add(m.id) : selected.delete(m.id); draw(); };
+  };
+
+  const incRow = (i) => `<li><a href="#/incident/${encodeURIComponent(i.id)}">${esc(i.monitorName)}</a> <span class="muted small">${esc(fmtDate(i.start))} · ${dur(i.durationMs)}${i.end ? '' : ' (in corso)'}</span><div class="small">${esc(i.cause.message)}</div></li>`;
+  app().innerHTML = `
+    ${d.dev ? '<div class="notice warn">Modalità sviluppo: il monitoraggio gira in questo processo solo finché il server è attivo, quindi i dati non sono affidabili. In produzione gira su Vercel.</div>' : ''}
+    ${d.beat.stale ? `<div class="notice error">Monitoraggio fermo${d.beat.last ? ` da ${esc(dur(d.now - d.beat.last))}` : ': nessun giro di controllo ancora eseguito'}.</div>` : ''}
+    ${d.channelsInError.map((c) => `<div class="notice error">Il canale di notifica «${esc(c.name)}» non funziona da ${esc(dur(d.now - c.failingSince))}: ${esc(c.lastError || '')}. <a href="#/notifications">Controlla le notifiche</a></div>`).join('')}
+    ${!d.channelCount ? '<div class="notice warn">Nessun canale di notifica: gli incidenti restano solo qui. <a href="#/notifications">Aggiungi email, Slack o Telegram</a></div>' : ''}
+    ${d.beat.unreliable.length ? `<div class="notice warn">Monitoraggio non affidabile nelle ultime 24 ore (${d.beat.unreliable.length} giri scartati per problemi di rete del monitor): quei periodi non contano nei KPI.</div>` : ''}
+    <div class="head"><div><h1>Monitoraggio</h1><div class="sub">Disponibilità dei tuoi siti, controllati ogni pochi minuti</div></div>
+      <div class="row"><button class="btn" id="monBulk">Aggiunta in blocco</button><button class="btn" id="monImport">Da un sito</button><a class="btn" href="#/maintenance">Manutenzione</a><a class="btn" href="#/notifications">Notifiche</a><a class="btn" href="/api/monitors.csv">CSV ↓</a><button class="btn primary" id="monAdd">+ Aggiungi monitor</button></div></div>
+    <div class="stats" id="monStats"></div>
+    <div class="row filters">
+      <select id="fTag" aria-label="Tag"><option value="">Tutti i tag</option>${d.tags.map((t) => `<option${filter.tag === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>
+      <select id="fStatus" aria-label="Stato"><option value="">Tutti gli stati</option>${Object.entries(MSTATUS).map(([k, [l]]) => `<option value="${k}"${filter.status === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      <select id="fHealth" aria-label="Salute"><option value="">Ogni salute</option>${Object.keys(HEALTH).map((k) => `<option${filter.health === k ? ' selected' : ''}>${k}</option>`).join('')}</select>
+      <input class="input" id="fQ" type="search" placeholder="Cerca nome o URL" value="${esc(filter.q)}">
+    </div>
+    <div class="bulkbar row" id="bulkBar" hidden><b id="bulkCount"></b>
+      <button class="btn small" data-act="pause">Pausa</button><button class="btn small" data-act="resume">Riprendi</button>
+      <select class="input small" data-act-select="interval"><option value="">Intervallo…</option>${[5, 10, 15, 30, 60].map((v) => `<option value="${v}">ogni ${v} min</option>`).join('')}</select>
+      <button class="btn small" data-act="add-tag">Aggiungi tag…</button>
+      <select class="input small" data-act-select="maintenance"><option value="">Manutenzione…</option><option value="15">per 15 min</option><option value="30">per 30 min</option><option value="60">per 60 min</option></select>
+      <button class="btn small danger" data-act="delete">Elimina…</button></div>
+    <div class="monlayout"><div class="panel tablewrap" id="monList"></div>
+      <aside>
+        <div class="panel"><h3>Incidenti in corso</h3>${d.openIncidents.length ? `<ul class="plain">${d.openIncidents.map(incRow).join('')}</ul>` : '<p class="muted small">Nessuno</p>'}</div>
+        <div class="panel"><h3>Ultimi incidenti</h3>${d.recentIncidents.length ? `<ul class="plain">${d.recentIncidents.map(incRow).join('')}</ul><a class="small" href="/api/incidents.csv">Esporta CSV ↓</a>` : '<p class="muted small">Nessuno negli ultimi 90 giorni</p>'}</div>
+        <div class="panel"><h3>Certificati in scadenza</h3>${d.certs.length ? `<ul class="plain">${d.certs.map((c) => `<li><a href="#/monitor/${encodeURIComponent(c.id)}">${esc(c.name)}</a> <span class="${c.days <= 7 ? 'sev-e' : 'sev-w'}">${c.days < 0 ? 'scaduto' : `tra ${c.days} giorni`}</span></li>`).join('')}</ul>` : '<p class="muted small">Nessuno entro 30 giorni</p>'}</div>
+        <div class="panel"><h3>Manutenzione</h3>${d.windows.length ? `<ul class="plain">${d.windows.slice(0, 8).map((w) => `<li>${w.active ? '<span class="tag info">in corso</span> ' : ''}<b>${esc(w.name)}</b> <span class="small muted">${esc(fmtDate(w.start))} → ${esc(new Date(w.end).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }))} · ${w.monitors.length} monitor</span></li>`).join('')}</ul>` : '<p class="muted small">Nessuna nei prossimi 7 giorni</p>'}</div>
+      </aside></div>`;
+  draw();
+  const setF = (k, v) => { filter[k] = v; writeMonFilter(filter); draw(); };
+  $('#fTag').onchange = (e) => setF('tag', e.target.value);
+  $('#fStatus').onchange = (e) => setF('status', e.target.value);
+  $('#fHealth').onchange = (e) => setF('health', e.target.value);
+  $('#fQ').oninput = (e) => setF('q', e.target.value);
+  $('#monAdd').onclick = async () => { if (await editMonitorDialog()) viewMonitoring(); };
+  $('#monBulk').onclick = bulkAddDialog;
+  $('#monImport').onclick = importSiteDialog;
+  const act = async (action, value) => {
+    if (action === 'delete') {
+      const ok = await formDialog({ title: `Eliminare ${selected.size} monitor?`, body: '<p>Vengono cancellati anche il loro storico: controlli, incidenti e KPI.</p>', confirm: 'Elimina', danger: true });
+      if (!ok) return;
+    }
+    if (action === 'add-tag') {
+      const fd = await formDialog({ title: 'Aggiungi un tag', body: '<label class="f"><span>Tag</span><input type="text" name="tag" required></label>', confirm: 'Aggiungi' });
+      if (!fd) return;
+      value = fd.get('tag');
+    }
+    try {
+      const r = await api('POST', 'monitors/actions', { ids: [...selected], action, value });
+      toast(action === 'maintenance' ? `In manutenzione per ${value} minuti: ${r.count} monitor` : `Fatto: ${r.count} monitor`);
+      viewMonitoring();
+    } catch (e) { toast(e.message, true); }
+  };
+  for (const b of $$('[data-act]')) b.onclick = () => act(b.dataset.act);
+  for (const s of $$('[data-act-select]')) s.onchange = () => { if (s.value) act(s.dataset.actSelect, Number(s.value)); };
+  // RF-KPI-02: refreshed every 30 seconds while the page is open
+  const timer = setInterval(async () => {
+    if (state.view.name !== 'monitoring' || document.querySelector('dialog[open]')) return;
+    if (!location.hash.startsWith('#/monitoring')) return clearInterval(timer);
+    try {
+      Object.assign(d, await api('GET', 'monitoring'));
+      draw();
+    } catch { /* next time */ }
+  }, 30000);
+  state.view.stop = () => clearInterval(timer);
+}
+
+async function bulkAddDialog() {
+  let r = null;
+  const fd = await formDialog({
+    title: 'Aggiunta in blocco',
+    body: `<label class="f"><span>Un sito per riga: «URL» oppure «nome, URL»</span><textarea name="text" rows="8" required placeholder="https://www.esempio.it/\nNegozio, https://shop.esempio.it/"></textarea></label>
+      <div class="fields"><label class="f"><span>Intervallo</span><select name="intervalMin">${[5, 10, 15, 30, 60].map((v) => `<option value="${v}">ogni ${v} min</option>`).join('')}</select></label>
+      <label class="f"><span>Tag comuni</span><input type="text" name="tags" placeholder="cliente, server…"></label></div>`,
+    confirm: 'Aggiungi',
+    submit: async (f) => { r = await api('POST', 'monitors/bulk', { text: f.get('text'), intervalMin: Number(f.get('intervalMin')), tags: String(f.get('tags')).split(',').map((t) => t.trim()).filter(Boolean) }); },
+  });
+  if (!fd) return;
+  if (r.skipped.length) {
+    await formDialog({ title: `${r.created.length} monitor aggiunti, ${r.skipped.length} righe saltate`, body: `<ul class="plain small">${r.skipped.map((s) => `<li><span class="mono">${esc(s.line)}</span> — ${esc(s.reason)}</li>`).join('')}</ul>`, confirm: 'Ok', cancel: false });
+  } else toast(`${r.created.length} monitor aggiunti: il primo controllo arriva al prossimo giro`);
+  viewMonitoring();
+}
+
+async function importSiteDialog() {
+  const sites = (state.info.sites || []).filter((s) => s.configured && !s.error);
+  if (!sites.length) return toast('Nessun sito configurato da importare', true);
+  let r = null;
+  const fd = await formDialog({
+    title: 'Monitor da un sito',
+    body: `<p>Un monitor per ogni ambiente del sito, con le sue credenziali di basic auth.</p><label class="f"><span>Sito</span><select name="site">${sites.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} (${Object.keys(s.envs).join(', ')})</option>`).join('')}</select></label>`,
+    confirm: 'Crea i monitor',
+    submit: async (f) => { r = await api('POST', 'monitors/import-site', { site: f.get('site') }); },
+  });
+  if (!fd) return;
+  toast(`${r.created.length} monitor creati${r.skipped.length ? `, ${r.skipped.length} già presenti` : ''}`);
+  viewMonitoring();
+}
+
+async function viewMonitor(id) {
+  const m = await api('GET', `monitors/${encodeURIComponent(id)}`);
+  setView('monitoring');
+  const P = [['24h', '24 ore'], ['7d', '7 giorni'], ['30d', '30 giorni'], ['90d', '90 giorni'], ['12m', '12 mesi'], ['month', 'Mese corrente']];
+  const row = (label, f) => `<tr><th>${label}</th>${P.map(([k]) => `<td class="num">${f(m.periods[k])}</td>`).join('')}</tr>`;
+  const cert = m.state.cert;
+  app().innerHTML = `
+    <div class="head"><div><h1>${esc(m.name)}</h1><div class="sub mono"><a href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">${esc(m.url)}</a></div>
+      <div class="row">${mstatusTag(m.status)} ${healthTag(m.health)} <span class="muted small">${m.status === 'down' ? 'giù' : 'nello stato attuale'} da ${dur(Date.now() - (m.state.since || Date.now()))} · ogni ${m.intervalMin} min</span>${m.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div></div>
+      <div class="row"><button class="btn" id="mCheck"${m.paused ? ' disabled' : ''}>Controlla ora</button><button class="btn" id="mEdit">Modifica</button>
+        <button class="btn" id="mPause">${m.paused ? 'Riprendi' : 'Metti in pausa'}</button><button class="btn danger" id="mDel">Elimina…</button></div></div>
+    ${m.health.reasons.length ? `<div class="notice ${m.health.level === 'critica' ? 'error' : 'warn'}">${esc(m.health.level === 'critica' ? 'Critica' : 'Attenzione')}: ${esc(m.health.reasons.join('; '))}</div>` : ''}
+    ${m.state.lastError && m.status === 'down' ? `<div class="notice error">${esc(m.state.lastError.message)}</div>` : ''}
+    <div class="stats">
+      ${stat('Disponibilità 30 giorni', pct(m.k30.availability), `obiettivo ${pct(m.slaPct)}`)}
+      ${stat('Budget di errore (mese)', m.budget.leftMs >= 0 ? `restano ${dur(m.budget.leftMs)}` : `<span class="sev-e">superato di ${dur(-m.budget.leftMs)}</span>`, `ammessi ${dur(m.budget.allowedMs)}`)}
+      ${stat('Risposta (30 giorni)', m.k30.response ? `${m.k30.response.avg} ms` : '—', m.k30.response ? `p95 ${m.k30.response.p95} ms` : '')}
+      ${stat('Certificato', cert ? `${m.certDays < 0 ? 'scaduto' : `${m.certDays} giorni`}` : '—', cert ? esc(cert.issuer || '') : m.url.startsWith('https') ? 'non ancora letto' : 'non https')}
+    </div>
+    <div class="panel tablewrap"><h2>KPI</h2><table class="kpi"><thead><tr><th></th>${P.map(([, l]) => `<th class="num">${l}</th>`).join('')}</tr></thead><tbody>
+      ${row('Disponibilità', (k) => pct(k.availability))}
+      ${row('Downtime', (k) => dur(k.downtimeMs))}
+      ${row('Incidenti', (k) => fmtNum(k.incidents))}
+      ${row('MTTR', (k) => dur(k.mttrMs))}
+      ${row('MTBF', (k) => dur(k.mtbfMs))}
+      ${row('Incidente più lungo', (k) => (k.longest ? dur(k.longest.ms) : '—'))}
+      ${row('Risposta media / p95', (k) => (k.response ? `${k.response.avg} / ${k.response.p95} ms` : '—'))}
+      ${row('Copertura', (k) => (k.coverage == null ? '—' : `${Math.round(k.coverage * 100)}%`))}
+    </tbody></table><p class="small muted">Copertura: parte del periodo effettivamente monitorata (pause, manutenzione e periodi senza giri non contano). Il p95 oltre l'ora corrente è calcolato dagli aggregati ed è approssimato.</p></div>
+    <div class="panel"><h2>Tempo di risposta, ultimi 7 giorni</h2>${responseChart(m.responses7d)}</div>
+    <div class="panel"><h2>Disponibilità giornaliera, ultimi 90 giorni</h2>${bars90(m.last90, Date.now())}<a class="small" href="/api/monitors/daily.csv?monitor=${encodeURIComponent(m.id)}">Esporta CSV ↓</a></div>
+    <div class="grid2">
+      <div class="panel tablewrap"><h2>Incidenti</h2>${m.incidents.length ? `<table><thead><tr><th>Inizio</th><th>Durata</th><th>Causa</th></tr></thead><tbody>${m.incidents.map((i) => `<tr><td><a href="#/incident/${encodeURIComponent(i.id)}">${esc(fmtDate(i.start))}</a></td><td>${dur(i.durationMs)}${i.end ? '' : ' <span class="tag error">in corso</span>'}</td><td>${esc(i.cause.message)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Nessun incidente</p>'}</div>
+      <div class="panel tablewrap"><h2>Ultimi controlli</h2><table><thead><tr><th>Ora</th><th>Esito</th><th class="num">ms</th><th>Dettaglio</th></tr></thead><tbody>${m.checks.slice(0, 15).map((c) => `<tr><td>${esc(fmtDate(c.at))}</td><td><span class="tag ${c.outcome === 'ok' ? 'ok' : c.outcome === 'slow' ? 'warn' : 'error'}">${c.outcome === 'ok' ? 'ok' : c.outcome === 'slow' ? 'lento' : 'errore'}</span></td><td class="num">${c.ms ?? '—'}</td><td class="small">${esc(c.error || (c.status ? `HTTP ${c.status}` : ''))}${c.retried ? ' <span class="muted">(ripetuto)</span>' : ''}</td></tr>`).join('')}</tbody></table></div>
+    </div>`;
+  $('#mCheck').onclick = async () => { try { await api('POST', `monitors/${m.id}/check`, {}); viewMonitor(id); } catch (e) { toast(e.message, true); } };
+  $('#mEdit').onclick = async () => { if (await editMonitorDialog(m)) viewMonitor(id); };
+  $('#mPause').onclick = async () => { await api('POST', 'monitors/actions', { ids: [m.id], action: m.paused ? 'resume' : 'pause' }); viewMonitor(id); };
+  $('#mDel').onclick = async () => {
+    const days = Math.max(1, Math.round((Date.now() - m.createdAt) / 864e5));
+    const ok = await formDialog({ title: `Eliminare «${m.name}»?`, body: `<p>Si perdono ${days} giorni di storico: controlli, incidenti e KPI.</p>`, confirm: 'Elimina', danger: true });
+    if (!ok) return;
+    await api('DELETE', `monitors/${m.id}`);
+    toast('Monitor eliminato');
+    location.hash = '#/monitoring';
+  };
+}
+
+async function viewIncident(id) {
+  const i = await api('GET', `incidents/${encodeURIComponent(id)}`);
+  setView('monitoring');
+  const m = i.monitor;
+  app().innerHTML = `
+    <div class="head"><div><h1>Incidente${m ? ` · ${esc(m.name)}` : ''}</h1><div class="sub">${esc(fmtDate(i.start))} → ${i.end ? esc(fmtDate(i.end)) : '<b>in corso</b>'} · ${dur(i.durationMs)}${i.closedBy === 'paused' ? ' · chiuso mettendo in pausa il monitor' : ''}</div></div>
+      <div class="row">${m ? `<a class="btn" href="#/monitor/${encodeURIComponent(m.id)}">Monitor</a>` : ''}${m && m.source && i.end ? `<button class="btn primary" id="iScan">Lancia una scan</button>` : ''}</div></div>
+    <div class="grid2">
+      <div class="panel"><h2>Cause</h2><ul class="plain">${i.causes.map((c) => `<li><span class="muted small">${esc(fmtDate(c.at))}</span> ${esc(c.message)}</li>`).join('')}</ul>
+        ${i.excerpt ? `<h3>Risposta del server</h3><pre class="excerpt">${esc(i.excerpt)}</pre>` : ''}</div>
+      <div class="panel"><h2>Avvisi</h2>${i.events.length ? `<ul class="plain">${i.events.map((e) => `<li><b>${esc(e.type)}</b> <span class="muted small">${esc(fmtDate(e.at))}</span> ${e.deliveries ? e.deliveries.map((x) => `<span class="tag ${x.ok ? 'ok' : 'error'}">${esc(x.channel)}</span>`).join(' ') : `<span class="muted small">${esc(EVENT_STATUS[e.status] || e.status)}</span>`}</li>`).join('')}</ul>` : '<p class="muted small">Nessun avviso registrato</p>'}</div>
+    </div>
+    <form class="panel form" id="iNote"><h2>Nota</h2><textarea class="input" name="note" rows="3" placeholder="Cosa è successo, cosa è stato fatto…">${esc(i.note || '')}</textarea><div class="row"><button class="btn primary">Salva nota</button></div></form>
+    <div class="panel tablewrap"><h2>Controlli</h2><table><thead><tr><th>Ora</th><th>Esito</th><th class="num">ms</th><th>Dettaglio</th></tr></thead><tbody>${i.checks.map((c) => `<tr><td>${esc(fmtDate(c.at))}</td><td><span class="tag ${c.outcome === 'error' ? 'error' : 'ok'}">${c.outcome === 'error' ? 'errore' : 'ok'}</span></td><td class="num">${c.ms ?? '—'}</td><td class="small">${esc(c.error || (c.status ? `HTTP ${c.status}` : ''))}</td></tr>`).join('')}</tbody></table></div>`;
+  $('#iNote').onsubmit = async (e) => { e.preventDefault(); await api('PUT', `incidents/${i.id}`, { note: e.target.note.value }); toast('Nota salvata'); };
+  const scan = $('#iScan');
+  // RF-MON-31: verify what changed after the site came back
+  if (scan) scan.onclick = async () => { try { await startJob({ type: 'scan', site: m.source.site, env: m.source.env, label: `dopo incidente ${new Date(i.start).toLocaleDateString('it-IT')}` }); toast('Scan avviata'); } catch (x) { toast(x.message, true); } };
+}
+
+const EVENT_STATUS = { pending: 'da inviare', sent: 'inviato', failed: 'non consegnato', suppressed: 'non inviato', delayed: 'in attesa del ritardo' };
+const WEEKDAYS = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
+
+async function viewMaintenance() {
+  const [windows, monitors] = await Promise.all([api('GET', 'maintenance'), api('GET', 'monitors')]);
+  setView('monitoring');
+  const names = new Map(monitors.map((m) => [m.id, m.name]));
+  const when = (w) => (w.type === 'once' ? esc(fmtDate(w.start)) : w.type === 'weekly' ? `ogni ${w.days.map((d) => WEEKDAYS[d]).join(', ')} alle ${esc(w.time)}` : `il giorno ${w.dayOfMonth} di ogni mese alle ${esc(w.time)}`);
+  app().innerHTML = `
+    <div class="head"><div><h1>Manutenzione</h1><div class="sub">Durante una finestra i controlli continuano ma non aprono incidenti né mandano avvisi, e quel tempo non conta nei KPI.</div></div>
+      <div class="row"><a class="btn" href="#/monitoring">← Monitoraggio</a><button class="btn primary" id="wNew">+ Nuova finestra</button></div></div>
+    <div class="panel tablewrap">${windows.length ? `<table><thead><tr><th>Nome</th><th>Quando</th><th>Durata</th><th>Monitor</th><th></th></tr></thead><tbody>${windows.map((w) => `<tr><td><b>${esc(w.name)}</b>${w.endedAt ? ' <span class="tag">chiusa</span>' : ''}</td><td>${when(w)}</td><td>${dur(w.durationMin * 60000)}</td>
+      <td>${[...w.tags.map((t) => `<span class="tag">tag ${esc(t)}</span>`), ...w.monitorIds.map((x) => esc(names.get(x) || x))].join(', ')}</td>
+      <td><div class="row">${!w.endedAt ? `<button class="btn small" data-wend="${esc(w.id)}">Chiudi ora</button>` : ''}<button class="btn small danger" data-wdel="${esc(w.id)}">Elimina</button></div></td></tr>`).join('')}</tbody></table>` : '<p class="empty">Nessuna finestra di manutenzione. Sono facoltative.</p>'}</div>`;
+  for (const b of $$('[data-wend]')) b.onclick = async () => { await api('POST', `maintenance/${b.dataset.wend}/end`, {}); viewMaintenance(); };
+  for (const b of $$('[data-wdel]')) b.onclick = async () => { await api('DELETE', `maintenance/${b.dataset.wdel}`); viewMaintenance(); };
+  $('#wNew').onclick = async () => {
+    const tags = [...new Set(monitors.flatMap((m) => m.tags))];
+    const fd = await formDialog({
+      title: 'Nuova finestra di manutenzione',
+      body: `<label class="f"><span>Nome</span><input type="text" name="name" required placeholder="Rilascio settimanale"></label>
+        <div class="fields"><label class="f"><span>Tipo</span><select name="type"><option value="once">una volta</option><option value="weekly">ogni settimana</option><option value="monthly">ogni mese</option></select></label>
+        <label class="f"><span>Inizio (una volta)</span><input type="datetime-local" name="start"></label>
+        <label class="f"><span>Ora (ricorrente)</span><input type="time" name="time" value="22:00"></label>
+        <label class="f"><span>Giorno del mese</span><input type="number" name="dayOfMonth" min="1" max="31" value="1"></label>
+        <label class="f"><span>Durata (min)</span><input type="number" name="durationMin" min="5" max="1440" value="60"></label></div>
+        <div class="row small">${WEEKDAYS.map((d, i) => `<label class="check"><input type="checkbox" name="day" value="${i}"> ${d}</label>`).join('')}</div>
+        <label class="f"><span>Tag (vale anche per i monitor aggiunti dopo)</span><select name="tag"><option value="">—</option>${tags.map((t) => `<option>${esc(t)}</option>`).join('')}</select></label>
+        <label class="f"><span>Oppure i monitor</span><select name="monitorIds" multiple size="6">${monitors.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label>`,
+      confirm: 'Crea',
+      submit: (f) => api('POST', 'maintenance', {
+        name: f.get('name'), type: f.get('type'), start: f.get('start') ? new Date(f.get('start')).getTime() : null, time: f.get('time'), dayOfMonth: Number(f.get('dayOfMonth')),
+        durationMin: Number(f.get('durationMin')), days: f.getAll('day').map(Number), tags: f.get('tag') ? [f.get('tag')] : [], monitorIds: f.getAll('monitorIds'),
+      }),
+    });
+    if (fd) viewMaintenance();
+  };
+}
+
+// RF-MON-30: the monitors of a site's environments, on the site page
+async function siteMonitors(d) {
+  if (!monitoringOn() || !d.config) return;
+  const monitors = await api('GET', 'monitoring').then((x) => x.monitors).catch(() => []);
+  const urls = new Set(Object.values(d.config.envs).map((e) => e.baseUrl));
+  const mine = monitors.filter((m) => urls.has(m.url) || (m.source && m.source.site === d.id));
+  const box = document.createElement('div');
+  box.className = 'panel';
+  box.innerHTML = `<h3>Monitoraggio</h3>${mine.length ? mine.map((m) => `<div class="row"><a href="#/monitor/${encodeURIComponent(m.id)}">${esc(m.name)}</a> ${mstatusTag(m.status)} <span class="small muted">${pct(m.k30.availability)} a 30 giorni</span></div>`).join('') : '<p class="small muted">Nessun monitor per gli ambienti di questo sito. <a href="#/monitoring">Aggiungili dal monitoraggio</a> («Da un sito»).</p>'}`;
+  const body = $('#tabBody');
+  if (body) body.before(box);
+}
+
+// ---- notifications (spec §12.5) ----
+const CH_TYPE = { email: 'Email', slack: 'Slack', telegram: 'Telegram' };
+const CH_STATUS = { active: ['attivo', 'ok'], pending: ['da confermare', 'warn'], error: ['in errore', 'error'] };
+
+async function viewNotifications() {
+  const d = await api('GET', 'channels');
+  setView('notifications');
+  const tzs = ['Europe/Rome', 'Europe/London', 'Europe/Berlin', 'Europe/Madrid', 'America/New_York', 'America/Los_Angeles', 'Asia/Tokyo', 'UTC'];
+  if (!tzs.includes(d.tz)) tzs.unshift(d.tz);
+  app().innerHTML = `
+    <div class="head"><div><h1>Notifiche</h1><div class="sub">Dove arrivano gli avvisi del monitoraggio: giù, di nuovo su, certificati in scadenza. I canali sono tuoi e li vedi solo tu.</div></div>
+      <div class="row"><a class="btn" href="#/monitoring">← Monitoraggio</a></div></div>
+    <div class="panel tablewrap">${d.channels.length ? `<table><thead><tr><th>Canale</th><th>Destinazione</th><th>Stato</th><th>Ultimo invio riuscito</th><th></th></tr></thead><tbody>${d.channels.map((c) => `<tr>
+      <td><b>${esc(c.name)}</b><div class="small muted">${CH_TYPE[c.type]}</div></td><td class="mono small">${esc(c.target)}</td>
+      <td><span class="tag ${CH_STATUS[c.status][1]}">${CH_STATUS[c.status][0]}</span>${c.lastError ? `<div class="small sev-e">${esc(c.lastError)}</div>` : ''}${c.status === 'pending' ? '<div class="small muted">apri il link che ti abbiamo inviato</div>' : ''}</td>
+      <td class="small">${c.lastOkAt ? esc(fmtDate(c.lastOkAt)) : '—'}</td>
+      <td><div class="row"><button class="btn small" data-ctest="${esc(c.id)}"${c.status === 'pending' ? ' disabled' : ''}>Prova</button><button class="btn small danger" data-cdel="${esc(c.id)}">Elimina</button></div></td></tr>`).join('')}</tbody></table>`
+      : '<p class="empty">Nessun canale: senza canali gli incidenti restano solo nella dashboard.</p>'}</div>
+    <div class="grid2">
+      <form class="card form" id="addMail"><h2>Email</h2>${d.available.email ? `<label class="f"><span>Indirizzo</span><input type="email" name="address" required></label><p class="small muted">Riceverai un link: l'indirizzo diventa attivo quando lo apri.</p><div class="row"><button class="btn primary">Aggiungi</button></div>` : '<p class="muted small">Non disponibile: il deploy non ha configurato Resend (RESEND_API_KEY, SITESCANNER_EMAIL_FROM).</p>'}</form>
+      <form class="card form" id="addSlack"><h2>Slack</h2><label class="f"><span>Nome</span><input type="text" name="name" placeholder="#ops"></label><label class="f"><span>URL dell'Incoming Webhook</span><input type="url" name="webhookUrl" required placeholder="https://hooks.slack.com/services/…"></label><p class="small muted">In Slack: App → Incoming Webhooks → «Add New Webhook», scegli il canale e copia l'URL.</p><div class="row"><button class="btn primary">Aggiungi</button></div></form>
+      <div class="card"><h2>Telegram</h2>${d.available.telegram ? '<p class="small">Apri il link con Telegram, in una chat privata o in un gruppo, e premi «Avvia»: la chat si collega da sola. Il link vale 15 minuti.</p><div class="row"><button class="btn primary" id="tgLink">Genera il link</button></div><p id="tgOut" class="small"></p>' : '<p class="muted small">Non disponibile: il deploy non ha un bot Telegram (SITESCANNER_TELEGRAM_BOT_TOKEN).</p>'}</div>
+      <form class="card form" id="tzForm"><h2>Fuso orario degli avvisi</h2><label class="f"><span>Fuso orario</span><select name="tz">${tzs.map((t) => `<option${t === d.tz ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label><div class="row"><button class="btn primary">Salva</button></div></form>
+    </div>`;
+  const add = (form, body) => async (e) => {
+    e.preventDefault();
+    try {
+      await api('POST', 'channels', body(new FormData(e.target)));
+      toast('Canale aggiunto');
+      viewNotifications();
+    } catch (x) { toast(x.message, true); }
+  };
+  if ($('#addMail input')) $('#addMail').onsubmit = add('#addMail', (f) => ({ type: 'email', address: f.get('address') }));
+  $('#addSlack').onsubmit = add('#addSlack', (f) => ({ type: 'slack', name: f.get('name') || 'Slack', webhookUrl: f.get('webhookUrl') }));
+  $('#tzForm').onsubmit = async (e) => { e.preventDefault(); try { await api('PUT', 'notify-prefs', { tz: new FormData(e.target).get('tz') }); toast('Fuso orario salvato'); } catch (x) { toast(x.message, true); } };
+  const tg = $('#tgLink');
+  if (tg) tg.onclick = async () => {
+    try {
+      const r = await api('POST', 'channels/telegram-link', {});
+      $('#tgOut').innerHTML = `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a><br><span class="muted">Dopo «Avvia» ricarica questa pagina.</span>`;
+    } catch (x) { toast(x.message, true); }
+  };
+  for (const b of $$('[data-ctest]')) b.onclick = async () => {
+    try {
+      const r = await api('POST', `channels/${b.dataset.ctest}/test`, {});
+      toast(r.ok ? 'Notifica di prova inviata' : `Invio fallito: ${r.error}`, !r.ok);
+      viewNotifications();
+    } catch (x) { toast(x.message, true); }
+  };
+  for (const b of $$('[data-cdel]')) b.onclick = async () => {
+    const ok = await formDialog({ title: 'Eliminare il canale?', body: '<p>Gli avvisi non arriveranno più qui.</p>', confirm: 'Elimina', danger: true });
+    if (!ok) return;
+    await api('DELETE', `channels/${b.dataset.cdel}`);
+    viewNotifications();
+  };
+}
+
 // ---- router ----
 async function route() {
   const [path, query = ''] = location.hash.slice(1).split('?');
@@ -845,6 +1552,13 @@ async function route() {
     else if (parts[0] === 'jobs') viewJobs();
     else if (parts[0] === 'inventory' && parts[1]) await viewInventory(parts[1]);
     else if (parts[0] === 'inventory') await viewInventories(params);
+    else if (parts[0] === 'profile' && multi()) await viewProfile();
+    else if (parts[0] === 'monitoring' && monitoringOn()) await viewMonitoring();
+    else if (parts[0] === 'monitor' && parts[1] && monitoringOn()) await viewMonitor(parts[1]);
+    else if (parts[0] === 'incident' && parts[1] && monitoringOn()) await viewIncident(parts[1]);
+    else if (parts[0] === 'maintenance' && monitoringOn()) await viewMaintenance();
+    else if (parts[0] === 'notifications' && monitoringOn()) await viewNotifications();
+    else if (parts[0] === 'users' && me() && me().role === 'admin') await viewUsers();
     else location.hash = '#/';
   } catch (e) {
     errorView(e);
@@ -852,11 +1566,21 @@ async function route() {
   window.scrollTo(0, 0);
 }
 
-window.addEventListener('hashchange', route);
-connectEvents();
-api('GET', 'state').then((info) => {
-  state.info = info;
-  $('#ver').textContent = info.tool.version;
-  $('#root').textContent = info.root;
-}).catch(() => {});
-route();
+async function boot() {
+  try {
+    state.info = await api('GET', 'state');
+  } catch (e) {
+    if (e.mustChangePassword) return forcePasswordChange();
+    throw e;
+  }
+  $('#ver').textContent = state.info.tool.version;
+  $('#root').textContent = state.info.root || '';
+  $('#rootwrap').hidden = !state.info.root;
+  renderAccount();
+  $('[data-nav="monitoring"]').hidden = !monitoringOn();
+  window.addEventListener('hashchange', route);
+  connectEvents();
+  route();
+}
+
+boot().catch((e) => errorView(e));

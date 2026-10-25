@@ -1,8 +1,10 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { QUALITY_DEFAULTS } from './analyze.js';
+import { UserError, validSiteId } from './errors.js';
+
+export { UserError, validSiteId };
 
 export function rootDir() {
   return path.resolve(process.env.SITESCANNER_HOME || process.cwd());
@@ -14,8 +16,6 @@ export const dirs = {
   get report() { return path.join(rootDir(), 'report'); },
   get inventory() { return path.join(rootDir(), 'inventory'); },
 };
-
-export class UserError extends Error {}
 
 const DEFAULTS = {
   start: ['/'],
@@ -38,6 +38,8 @@ const DEFAULTS = {
   quality: { disable: [], severity: {} },
 };
 
+const usesEnv = (v) => (typeof v === 'string' ? /\$\{\w+\}/.test(v) : v && typeof v === 'object' ? Object.values(v).some(usesEnv) : false);
+
 // Replaces ${VAR} with environment values so credentials stay out of the YAML.
 function interpolate(value) {
   if (typeof value === 'string') return value.replace(/\$\{(\w+)\}/g, (_, k) => process.env[k] ?? '');
@@ -46,33 +48,19 @@ function interpolate(value) {
   return value;
 }
 
-export function listSiteIds() {
-  if (!fs.existsSync(dirs.sites)) return [];
-  return fs.readdirSync(dirs.sites)
-    .filter((f) => /\.ya?ml$/.test(f))
-    .map((f) => f.replace(/\.ya?ml$/, ''))
-    .sort();
-}
-
-export function siteFile(id) {
-  for (const ext of ['yml', 'yaml']) {
-    const f = path.join(dirs.sites, `${id}.${ext}`);
-    if (fs.existsSync(f)) return f;
-  }
-  return null;
-}
-
-export const validSiteId = (id) => /^[\w.-]+$/.test(String(id || '')) && !/^\.+$/.test(id);
-
-export function loadSite(id) {
+/** Loads and validates a configured site of the storage area `st`. */
+export async function loadSite(st, id) {
   if (!validSiteId(id)) throw new UserError(`Id sito non valido: ${id}`);
-  const file = siteFile(id);
-  if (!file) throw new UserError(`Sito "${id}" non trovato in ${dirs.sites} (siti disponibili: ${listSiteIds().join(', ') || 'nessuno'})`);
-  return parseSite(id, fs.readFileSync(file, 'utf8'), file);
+  const raw = await st.readSiteRaw(id);
+  if (raw === null) {
+    const ids = await st.listSiteIds();
+    throw new UserError(`Sito "${id}" non trovato in ${st.sitesLocation} (siti disponibili: ${ids.join(', ') || 'nessuno'})`);
+  }
+  return parseSite(id, raw, st.siteLocation(id), { allowEnv: !st.isolated });
 }
 
 /** Parses and validates the YAML source of a site; `where` names it in error messages. */
-export function parseSite(id, raw, where = `${id}.yml`) {
+export function parseSite(id, raw, where = `${id}.yml`, { allowEnv = true } = {}) {
   let doc;
   try {
     doc = YAML.parse(raw) || {};
@@ -80,6 +68,8 @@ export function parseSite(id, raw, where = `${id}.yml`) {
     throw new UserError(`YAML non valido in ${where}: ${e.message}`);
   }
   if (typeof doc !== 'object' || Array.isArray(doc)) throw new UserError(`${where}: il file deve contenere un oggetto YAML`);
+  // RF-SEC-02: in a private area ${VAR} would send the server's environment to the site (comments do not count).
+  if (!allowEnv && usesEnv(doc)) throw new UserError(`${where}: le variabili d'ambiente (\${…}) non sono disponibili in modalità multi-utente: scrivi i valori nella configurazione`);
   const cfg = {
     ...DEFAULTS,
     ...doc,
@@ -130,27 +120,20 @@ export function adhocSite(baseUrl, overrides = {}) {
 export const siteDefaults = () => JSON.parse(JSON.stringify(DEFAULTS));
 
 /**
- * Writes sites/<id>.yml after validating it. Returns the parsed configuration.
+ * Saves the YAML source of a site after validating it. Returns the parsed configuration.
  * `create` refuses to overwrite an existing site.
  */
-export function saveSite(id, raw, { create = false } = {}) {
+export async function saveSite(st, id, raw, { create = false } = {}) {
   if (!validSiteId(id)) throw new UserError(`Id sito non valido: ${id} (ammessi lettere, cifre, "_", "-", ".")`);
-  const existing = siteFile(id);
-  if (create && existing) throw new UserError(`Il sito "${id}" esiste già`);
-  const cfg = parseSite(id, raw);
-  fs.mkdirSync(dirs.sites, { recursive: true });
-  const file = existing || path.join(dirs.sites, `${id}.yml`);
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, raw);
-  fs.renameSync(tmp, file);
+  if (create && (await st.readSiteRaw(id)) !== null) throw new UserError(`Il sito "${id}" esiste già`);
+  const cfg = parseSite(id, raw, `${id}.yml`, { allowEnv: !st.isolated });
+  await st.writeSiteRaw(id, raw, { create });
   return cfg;
 }
 
-/** Removes only the configuration: the history in data/ stays reportable. */
-export function deleteSite(id) {
-  const file = validSiteId(id) && siteFile(id);
-  if (!file) throw new UserError(`Sito "${id}" non trovato`);
-  fs.rmSync(file);
+/** Removes only the configuration: the history stays reportable. */
+export async function deleteSite(st, id) {
+  if (!validSiteId(id) || !(await st.deleteSiteConfig(id))) throw new UserError(`Sito "${id}" non trovato`);
 }
 
 /**

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": [
+    "fra1"
+  ],
+  "buildCommand": "",
+  "outputDirectory": "public",
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300,
+      "memory": 3008,
+      "includeFiles": "{src/**,package.json}"
+    },
+    "api/steps.js": {
+      "maxDuration": 300,
+      "memory": 4096,
+      "includeFiles": "{src/**,package.json}",
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "sitescanner-steps"
+        }
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/daily",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/monitor",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

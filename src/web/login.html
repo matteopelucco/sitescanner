@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Accesso · sitescanner</title>
+<link rel="stylesheet" href="/app/app.css">
+</head>
+<body class="loginpage">
+<main class="login">
+  <div class="brand"><span class="logo" aria-hidden="true">◎</span> sitescanner</div>
+  <form id="login" class="card form" autocomplete="on">
+    <h1>Accedi</h1>
+    <label class="f"><span>Username</span><input type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
+    <label class="f"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
+    <p id="err" class="formerr" role="alert" hidden></p>
+    <button class="btn primary" type="submit">Accedi</button>
+  </form>
+  <div id="setup" class="notice warn" hidden>
+    Non esiste ancora nessun account. Crea il primo admin con le variabili d'ambiente
+    <code>SITESCANNER_ADMIN_USER</code> e <code>SITESCANNER_ADMIN_PASSWORD</code> (poi riavvia il server),
+    oppure con <code>sitescanner user add &lt;username&gt; --admin</code>.
+  </div>
+</main>
+<script type="module" src="/app/login.js"></script>
+</body>
+</html>

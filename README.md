@@ -48,6 +48,8 @@ sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--m
 sitescanner export  --site <id> --base <x> [--head <y>] --out bundle/
 sitescanner pdf     --site <id> --base <x> [--head <y>] [--out file.pdf] [--redirect-map f.csv]
 sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
+sitescanner user    list | add <username> [--admin] [--name <nome>] | reset-password <username>
+                    | set <username> [--role admin|user] [--active true|false] | import <username> [--from <cartella>]
 ```
 
 - **scan `--all`**: scansiona in sequenza tutti i siti di `sites/`. Ogni sito è isolato: un errore (configurazione non valida, sito irraggiungibile) viene riportato nel riepilogo finale senza fermare gli altri. I siti che non definiscono l'ambiente richiesto vengono saltati. Exit code 1 se almeno un sito è fallito.
@@ -58,6 +60,7 @@ sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--
 - **inventory**: misura un sito (vedi «Inventario») e lo salva in `inventory/`.
 - **export**: crea una cartella autonoma con il report limitato alle due scan e i relativi screenshot copiati, già preselezionati come Base/Head. Senza `--head` contiene la sola Base e si apre sulla sua diagnostica. Si può zippare e condividere.
 - **pdf**: report in PDF A4 da consegnare o allegare: senza `--head` il report di qualità della scan, con `--head` il report di regressione. Copertina con esito e health score, sommario, intestazioni e «Pagina N di M», sezioni impaginate per la stampa. Richiede Playwright con Chromium (come gli screenshot); `SITESCANNER_CHROMIUM` indica un Chrome/Chromium già installato.
+- **user**: account della modalità multi-utente (vedi «Accesso multi-utente»). La password temporanea si legge da `SITESCANNER_PASSWORD` oppure viene generata e stampata, mai da un argomento (resterebbe nella cronologia della shell). `import` copia nell'area di un utente siti, scan e inventari di una cartella mono-utente.
 - **compare**: confronto da terminale/CI. `--fail-on error|warn` fa uscire con codice 1 se esistono differenze di quel livello o superiore; `--json` salva il risultato completo; `--visual` confronta pixel per pixel gli screenshot; `--redirect-map` accoppia URL vecchi e nuovi (CSV `from,to`, URL assoluti o path).
 
 Exit code: `0` ok · `1` soglia `--fail-on` superata o scan fallite · `2` errore d'uso o di configurazione.
@@ -126,6 +129,52 @@ Credenziali e header sensibili vengono mascherati nella copia della configurazio
 
 Le scan avviate dalla web app sono identiche a quelle da CLI e il report viene rigenerato dopo ognuna. I job vivono nel processo del server: se lo si chiude, una scan in corso va persa (senza lasciare dati parziali).
 
+### Accesso multi-utente
+
+Con `SITESCANNER_AUTH=1` (e sempre su Vercel, vedi «Pubblicazione su Vercel») la web app chiede username e password e ogni utente ha i propri siti, visibili solo a lui ([specifica §10](docs/specs/10-utenti-e-accesso.md)). Senza la variabile tutto resta com'è: nessun login, una sola cartella di lavoro.
+
+```sh
+SITESCANNER_AUTH=1 SITESCANNER_ADMIN_USER=admin SITESCANNER_ADMIN_PASSWORD='una-password-temporanea' sitescanner ui
+# oppure: SITESCANNER_PASSWORD='una-password-temporanea' sitescanner user add admin --admin
+```
+
+- Il primo admin si crea con `SITESCANNER_ADMIN_USER`/`SITESCANNER_ADMIN_PASSWORD` (usate solo se non esiste nessun account) o con `sitescanner user add --admin`. Ogni password impostata da un admin è temporanea: al primo accesso va cambiata.
+- L'admin, dalla pagina «Utenti», crea gli account, reimposta le password, disattiva, cambia ruolo ed elimina (con tutta l'area dell'utente); vede i conteggi di siti e scan ma non il loro contenuto. Il registro di accesso mostra login, tentativi falliti e azioni degli admin.
+- I dati di ogni utente stanno in `users/<username>/` (stessa struttura di `sites/`, `data/`, `inventory/`); account e sessioni in `auth/`. Il report è generato per l'utente collegato.
+- Sicurezza: sessioni revocabili (scadono dopo 7 giorni di inattività, al massimo 30), blocco dopo 5 tentativi falliti per username o 20 per IP in 15 minuti, header di sicurezza. Le scan non possono raggiungere indirizzi privati o locali (127.0.0.1, 10.x, 192.168.x, 169.254.169.254…): in locale si sbloccano con `SITESCANNER_ALLOW_PRIVATE_NETWORKS=1`. Le configurazioni non possono usare `${VAR}`. Limiti per utente: `SITESCANNER_MAX_PAGES` (1000), `SITESCANNER_MAX_CONCURRENCY` (8), `SITESCANNER_MIN_DELAY_MS` (0), `SITESCANNER_MAX_JOBS_PER_USER` (2).
+- Fuori da `localhost` serve HTTPS (es. un reverse proxy; con `SITESCANNER_TRUST_PROXY=1` il server legge schema e IP dagli header del proxy): altrimenti password e cookie viaggiano in chiaro.
+
+## Pubblicazione su Vercel
+
+Il repository si pubblica su Vercel così com'è, senza build ([specifica §11](docs/specs/11-vercel.md)): `vercel.json` manda ogni richiesta alla Function [api/index.js](api/index.js), che esegue la web app in modalità multi-utente con account e aree su **Postgres** (Neon) e file su **Vercel Blob privato**. Serve il piano **Pro**.
+
+1. Crea il progetto su Vercel collegando il repository (framework: *Other*; nessun comando di build).
+2. **Database**: dal Marketplace aggiungi **Neon** e collegalo al progetto, che riceve `DATABASE_URL`. Lo schema si crea da solo alla prima richiesta (migrazioni versionate).
+3. **File**: crea un Blob store **privato** nella stessa regione (consigliata `fra1`, quella delle Function in `vercel.json`) e collegalo al progetto, che riceve le credenziali (OIDC o `BLOB_READ_WRITE_TOKEN`).
+4. **Primo admin**: imposta `SITESCANNER_ADMIN_USER` e `SITESCANNER_ADMIN_PASSWORD` (usate solo finché non esiste nessun account; la password è temporanea e va cambiata al primo accesso). Dopo il primo accesso si possono togliere.
+5. **Manutenzione giornaliera**: imposta `CRON_SECRET` (una stringa casuale lunga): il Cron di `vercel.json` pulisce ogni notte sessioni scadute e file di scan interrotte.
+6. Facoltative: i limiti per utente `SITESCANNER_MAX_PAGES`, `SITESCANNER_MAX_CONCURRENCY`, `SITESCANNER_MIN_DELAY_MS`, `SITESCANNER_MAX_JOBS_PER_USER`.
+
+Le **preview** devono usare un database (o un branch Neon) e un Blob store diversi da quelli di produzione: nelle variabili d'ambiente del progetto assegna valori distinti all'ambiente *Preview*.
+
+Senza database o Blob store la Function risponde 503 indicando le variabili mancanti. Per amministrare gli account da terminale sullo stesso database: `SITESCANNER_STORAGE=vercel DATABASE_URL=… BLOB_READ_WRITE_TOKEN=… sitescanner user list` (anche `user import` per copiare uno storico locale nell'area di un utente).
+
+Scan e inventari girano **a passi** su **Vercel Queues** (Function `api/steps.js`, topic `sitescanner-steps`): ogni passo lavora al massimo 4 minuti (`SITESCANNER_STEP_BUDGET_MS`), salva lo stato e accoda il successivo, quindi una scan non ha limiti di durata e riprende da sola dopo un errore o un nuovo deploy. Screenshot e PDF usano `playwright-core` con il Chromium di `@sparticuz/chromium`. Le scan partono dagli IP di Vercel: gli ambienti raggiungibili solo da VPN o allowlist vanno scansionati in locale.
+
+## Monitoraggio della disponibilità
+
+Controlla a intervalli regolari (da 5 a 60 minuti) che i siti rispondano, ne tiene lo storico e calcola i KPI: disponibilità, downtime, incidenti, MTTR, MTBF, tempi di risposta, budget di errore rispetto all'obiettivo SLA, scadenza del certificato e una **salute** a tre livelli con il motivo ([specifica §12](docs/specs/12-monitoraggio.md)). Gira **su Vercel**, con un Cron ogni 5 minuti (`/api/cron/monitor`, protetto da `CRON_SECRET`); in locale solo per sviluppo, con `SITESCANNER_MONITOR_DEV=1` (`sitescanner ui` fa un giro ogni 5 minuti, `sitescanner monitor run` un giro solo).
+
+- **Monitor**: URL e nome; nelle opzioni avanzate intervallo, timeout, metodo, status attesi, keyword che deve (o non deve) comparire, soglia di lentezza, avvisi sul certificato, tag, obiettivo SLA, header e basic auth. Si aggiungono anche in blocco (un URL per riga), dai siti di sitescanner (un monitor per ambiente) o da CSV.
+- **Incidenti**: un errore si ripete dopo 10 secondi prima di dichiarare il sito giù; l'incidente registra cause, estratto della risposta e nota. Se in un giro falliscono per rete metà dei siti (almeno 5) e anche due URL di riferimento, il problema è la rete del monitor: il giro viene scartato.
+- **Manutenzione** (facoltativa): finestre singole, settimanali o mensili, per monitor o per tag, oppure «in manutenzione per 15/30/60 minuti» dalla dashboard; i controlli continuano ma non aprono incidenti e quel tempo non conta nei KPI.
+- **Dashboard**: prima i siti giù e quelli critici; filtri per tag (con i KPI del gruppo, es. «i siti del cliente X»), stato, salute e testo; 90 giorni a barre, ultime 24 ore, incidenti, certificati in scadenza, azioni in blocco.
+- **Chi controlla il monitor**: se i giri si fermano la dashboard lo mostra dopo 12 minuti; per saperlo anche a dashboard chiusa imposta `SITESCANNER_HEARTBEAT_URL` con l'URL di un servizio *dead man's switch* (es. un check di [healthchecks.io](https://healthchecks.io) con periodo 5 minuti e tolleranza 7): ogni giro lo chiama, e se smette il servizio ti avvisa.
+
+**Notifiche** (pagina «Notifiche», per account): email (via [Resend](https://resend.com): `RESEND_API_KEY` e `SITESCANNER_EMAIL_FROM` su un dominio verificato; ogni indirizzo va confermato con il link ricevuto), Slack (URL di un Incoming Webhook) e Telegram (un bot unico del deploy: `SITESCANNER_TELEGRAM_BOT_TOKEN`, `SITESCANNER_TELEGRAM_WEBHOOK_SECRET`, poi `sitescanner monitor telegram-webhook https://<dominio>`; l'utente collega la chat con un link valido 15 minuti). Avvisi di giù, di nuovo su, certificato in scadenza o scaduto, e a scelta lentezza e promemoria; ritardo di notifica per monitor, più di 3 cambi di stato insieme in un solo messaggio, al massimo 30 messaggi in 10 minuti per canale, 3 nuovi tentativi in caso di errore e canale segnalato «in errore» (con un'email, se c'è un indirizzo attivo); notifica di prova; orari nel fuso dell'account. I link negli avvisi usano `SITESCANNER_PUBLIC_URL` (su Vercel l'URL di produzione).
+
+Le richieste usano lo user agent `sitescanner-monitor/<versione>`: mettilo in allowlist se un firewall o un WAF filtra i bot. Altre variabili: `SITESCANNER_MAX_MONITORS_PER_USER` (200), `SITESCANNER_MON_RAW_DAYS` (30 giorni di controlli grezzi; gli aggregati orari restano 13 mesi, quelli giornalieri e gli incidenti sempre), `SITESCANNER_MON_CANARIES` (URL di riferimento).
+
 ## Inventario
 
 Un crawl senza screenshot e senza confronto, con limiti alti (5000 URL, profondità 50), per sapere quanto è grande un sito e com'è fatto:
@@ -191,7 +240,7 @@ sitescanner compare --site shop --base release --head latest --fail-on error --j
 npm test
 ```
 
-I test avviano un piccolo sito locale in due versioni e verificano scan, storico, confronto, redirect map, label, report, export e PDF; `test/analyze.test.js` le regole di qualità, `test/diagnose.test.js` e `test/print.test.js` diagnostica e documento di stampa, `test/web.test.js` API della web app, job, inventario e protezioni del server.
+I test avviano un piccolo sito locale in due versioni e verificano scan, storico, confronto, redirect map, label, report, export e PDF; `test/analyze.test.js` le regole di qualità, `test/diagnose.test.js` e `test/print.test.js` diagnostica e documento di stampa, `test/web.test.js` API della web app, job, inventario e protezioni del server, `test/storage.test.js` il contratto dello storage, `test/auth.test.js` accesso multi-utente, isolamento tra utenti, admin, limiti e blocco degli indirizzi privati, `test/vercel.test.js` la Function di Vercel con Postgres su PGlite e Blob in memoria. `npm run test:vercel` ripete storage e Function e, con `SITESCANNER_TEST_DATABASE_URL` e `BLOB_READ_WRITE_TOKEN` di un ambiente di test, prova lo storage anche sui servizi reali.
 
 I moduli di [src/core/](src/core/) (`compare.js`, `diagnose.js`, `print.js`) non hanno dipendenze esterne e sono inclusi così come sono nel report: CLI e browser usano la stessa logica di confronto, diagnostica e documento di stampa.
 

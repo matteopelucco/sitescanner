@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { dirs, listSiteIds, loadSite, UserError, EXAMPLE_SITE } from './config.js';
-import { listScans, listDataSites, loadScan, resolveScanRef, writeLabel, scanDir } from './store.js';
+import { dirs, loadSite, UserError, EXAMPLE_SITE } from './config.js';
+import { resolveScanRef, allSiteIds } from './store.js';
+import { storageFor } from './storage/index.js';
 import { scanSite, activeStaging } from './scan.js';
 import { compareScans, exceedsThreshold, parseRedirectMap, FINDING_TYPES } from './core/compare.js';
 import { healthScore } from './core/diagnose.js';
 import { buildReport } from './report/build.js';
-import { serve } from './server.js';
+import { serve, multiUserMode } from './server.js';
 import { runInventory } from './inventory.js';
 import { TOOL } from './version.js';
 
@@ -30,6 +31,11 @@ Uso:
   sitescanner export  --site <id> --base <x> [--head <y>] --out bundle/
   sitescanner pdf     --site <id> --base <x> [--head <y>] [--out file.pdf] [--redirect-map f.csv]
   sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
+  sitescanner user    list | add <username> [--admin] [--name <nome>] | reset-password <username>
+                      | set <username> [--role admin|user] [--active true|false] | import <username> [--from <cartella>]
+                      (account della modalità multi-utente, SITESCANNER_AUTH=1; password da SITESCANNER_PASSWORD o generata)
+  sitescanner monitor run   un giro dei controlli di disponibilità (sviluppo: SITESCANNER_MONITOR_DEV=1)
+  sitescanner monitor telegram-webhook [<url pubblico>]   registra il webhook del bot Telegram
 
 Riferimenti a una scan (--scan, --base, --head): id completo, prefisso univoco, label, "latest", "latest~N".
 Exit code: 0 ok · 1 soglia --fail-on superata o scan fallite · 2 errore d'uso/configurazione.
@@ -56,7 +62,10 @@ const SPECS = {
     site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, 'redirect-map': { type: 'string' },
     'fail-on': { type: 'string' }, json: { type: 'string' }, visual: { type: 'boolean' }, limit: { type: 'string' },
   },
+  user: { admin: { type: 'boolean' }, name: { type: 'string' }, role: { type: 'string' }, active: { type: 'string' }, from: { type: 'string' } },
+  monitor: {},
 };
+const POSITIONALS = new Set(['user', 'monitor']);
 
 function need(opts, ...names) {
   for (const n of names) if (opts[n] === undefined || opts[n] === '') throw new UserError(`Opzione obbligatoria mancante: --${n}`);
@@ -92,7 +101,8 @@ function cmdInit() {
     console.log(`Creato ${ex}`);
   }
   const gi = path.join(path.dirname(dirs.data), '.gitignore');
-  if (!fs.existsSync(gi)) fs.writeFileSync(gi, 'report/\nbundle/\ninventory/\n');
+  // auth/ holds password hashes and sessions of multi-user mode: never in version control
+  if (!fs.existsSync(gi)) fs.writeFileSync(gi, 'report/\nbundle/\ninventory/\nauth/\n');
   console.log(`Cartelle pronte: sites/ data/ report/ inventory/\nProssimo passo: sitescanner ui (web app) oppure sitescanner scan --site example --env prod`);
   return 0;
 }
@@ -118,13 +128,14 @@ async function cmdScan(o) {
     return 0;
   }
 
-  const ids = listSiteIds();
+  const st = storageFor();
+  const ids = await st.listSiteIds();
   if (!ids.length) throw new UserError(`Nessun sito in ${dirs.sites}`);
   const results = [];
   for (const id of ids) {
     let cfg;
     try {
-      cfg = loadSite(id);
+      cfg = await loadSite(st, id);
     } catch (e) {
       results.push({ id, status: 'failed', error: e.message });
       console.error(red(`✗ ${id}: ${e.message}`));
@@ -152,12 +163,14 @@ async function cmdScan(o) {
   return failed.length ? 1 : 0;
 }
 
-function cmdList(o) {
-  const sites = o.site ? [o.site] : [...new Set([...listSiteIds(), ...listDataSites()])].sort();
-  if (o.site && !listSiteIds().includes(o.site) && !listDataSites().includes(o.site)) throw new UserError(`Sito "${o.site}" sconosciuto`);
+async function cmdList(o) {
+  const st = storageFor();
+  const known = await allSiteIds(st);
+  const sites = o.site ? [o.site] : known;
+  if (o.site && !known.includes(o.site)) throw new UserError(`Sito "${o.site}" sconosciuto`);
   let any = false;
   for (const site of sites) {
-    const scans = listScans(site);
+    const scans = await st.listScans(site);
     console.log(bold(`\n${site}`) + dim(` (${scans.length} scan)`));
     if (!scans.length) continue;
     any = true;
@@ -171,18 +184,19 @@ function cmdList(o) {
   return 0;
 }
 
-function cmdLabel(o) {
+async function cmdLabel(o) {
   need(o, 'site', 'scan', 'label');
-  const id = resolveScanRef(o.site, o.scan);
-  writeLabel(o.site, id, { label: o.label, note: o.note });
+  const st = storageFor();
+  const id = await resolveScanRef(st, o.site, o.scan);
+  await st.writeLabel(o.site, id, { label: o.label, note: o.note });
   console.log(`${o.site} ${id}: label «${o.label}»${o.note !== undefined ? `, nota «${o.note}»` : ''}`);
   return 0;
 }
 
-function cmdReport(o) {
+async function cmdReport(o) {
   const out = o.out || dirs.report;
-  if (o.site && !listDataSites().includes(o.site)) throw new UserError(`Nessuna scan per il sito "${o.site}"`);
-  const r = buildReport({ outDir: out, sites: o.site ? [o.site] : null });
+  if (o.site && !(await storageFor().listDataSites()).includes(o.site)) throw new UserError(`Nessuna scan per il sito "${o.site}"`);
+  const r = await buildReport({ outDir: out, sites: o.site ? [o.site] : null });
   console.log(`Report generato in ${r.outDir} (${r.sites} siti, ${r.scans} scan)`);
   console.log(dim(`Apri ${path.join(r.outDir, 'index.html')} oppure: sitescanner serve`));
   return 0;
@@ -191,9 +205,10 @@ function cmdReport(o) {
 async function cmdUi(o) {
   const port = positiveInt(o.port, 'port') || 4173;
   const host = o.host || '127.0.0.1';
-  if (!fs.existsSync(path.join(dirs.report, 'index.html'))) {
+  // the static report is for the working folder; with accounts the report is generated per user
+  if (!multiUserMode() && !fs.existsSync(path.join(dirs.report, 'index.html'))) {
     console.log(dim('report/ non trovato: lo genero ora…'));
-    buildReport({ outDir: dirs.report });
+    await buildReport({ outDir: dirs.report });
   }
   try {
     await serve({ port, host });
@@ -204,8 +219,14 @@ async function cmdUi(o) {
   const url = `http://${host.includes(':') ? `[${host}]` : host}:${port}/`;
   console.log(`${bold('sitescanner')} su ${url}  ·  report: ${url}report/  (Ctrl+C per uscire)`);
   console.log(dim(`Cartella di lavoro: ${path.dirname(dirs.data)}`));
+  const multi = multiUserMode();
+  await startMonitorLoop();
+  if (multi) console.log(`Modalità multi-utente: accesso con username e password (${url}login)`);
   if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
-    console.log(yellow(`Attenzione: in ascolto su ${host}, la web app è raggiungibile da altre macchine senza autenticazione.`));
+    // RF-SEC-08: without HTTPS the session cookie travels in clear
+    console.log(yellow(multi
+      ? `Attenzione: in ascolto su ${host} senza HTTPS: password e cookie di sessione viaggiano in chiaro sulla rete.`
+      : `Attenzione: in ascolto su ${host}, la web app è raggiungibile da altre macchine senza autenticazione.`));
   }
   if (o.open) {
     const { spawn } = await import('node:child_process');
@@ -213,6 +234,27 @@ async function cmdUi(o) {
     spawn(opener[0], opener[1], { stdio: 'ignore', detached: true }).on('error', () => {}).unref();
   }
   return new Promise(() => {});
+}
+
+// RF-MON-18: locally the rounds run in the server process, every 5 minutes, only for development.
+async function startMonitorLoop() {
+  const { runRound, monitoringEnabled } = await import('./monitor/engine.js');
+  if (!monitoringEnabled()) return;
+  console.log(yellow('Monitoraggio in modalità sviluppo (SITESCANNER_MONITOR_DEV=1): giri ogni 5 minuti finché il server è attivo; i dati non sono affidabili.'));
+  const round = async () => {
+    try {
+      let areas = [''];
+      if (multiUserMode()) {
+        const [{ adminAreas }, { authFor }] = await Promise.all([import('./server.js'), import('./users-cli.js')]);
+        areas = await adminAreas(await authFor());
+      }
+      await runRound({ adminAreas: areas });
+    } catch (e) {
+      console.error(red(`Giro di controllo fallito: ${e.message}`));
+    }
+  };
+  setTimeout(round, 5000).unref();
+  setInterval(round, 5 * 60000).unref();
 }
 
 async function cmdInventory(o) {
@@ -244,18 +286,19 @@ async function cmdInventory(o) {
   return 0;
 }
 
-function cmdExport(o) {
+async function cmdExport(o) {
   need(o, 'site', 'base', 'out');
-  const base = resolveScanRef(o.site, o.base);
+  const st = storageFor();
+  const base = await resolveScanRef(st, o.site, o.base);
   // without --head the bundle opens on the diagnostic view of Base
-  const head = o.head ? resolveScanRef(o.site, o.head) : null;
+  const head = o.head ? await resolveScanRef(st, o.site, o.head) : null;
   const out = path.resolve(o.out);
   if (fs.existsSync(out) && fs.readdirSync(out).length && !fs.existsSync(path.join(out, 'index.html'))) {
     throw new UserError(`${out} esiste e non sembra un bundle sitescanner: scegli una cartella vuota`);
   }
   fs.rmSync(path.join(out, 'data'), { recursive: true, force: true });
   fs.rmSync(path.join(out, 'assets'), { recursive: true, force: true });
-  const r = buildReport({ outDir: out, sites: [o.site], onlyScans: { [o.site]: [...new Set([base, head].filter(Boolean))] }, copyAssets: true, preselect: { site: o.site, base, head } });
+  const r = await buildReport({ outDir: out, sites: [o.site], onlyScans: { [o.site]: [...new Set([base, head].filter(Boolean))] }, copyAssets: true, preselect: { site: o.site, base, head } });
   console.log(`Bundle creato in ${r.outDir} (Base ${base}${head ? `, Head ${head}` : ', diagnostica'}). Apri index.html o condividi la cartella.`);
   return 0;
 }
@@ -281,12 +324,13 @@ async function cmdPdf(o) {
 async function cmdCompare(o) {
   need(o, 'site', 'base', 'head');
   if (o['fail-on'] && !['error', 'warn'].includes(o['fail-on'])) throw new UserError('--fail-on accetta error o warn');
-  const baseId = resolveScanRef(o.site, o.base);
-  const headId = resolveScanRef(o.site, o.head);
-  const base = loadScan(o.site, baseId);
-  const head = loadScan(o.site, headId);
+  const st = storageFor();
+  const baseId = await resolveScanRef(st, o.site, o.base);
+  const headId = await resolveScanRef(st, o.site, o.head);
+  const base = await st.loadScan(o.site, baseId);
+  const head = await st.loadScan(o.site, headId);
   let cfgCompare = { ignore: [], thresholds: {} };
-  try { cfgCompare = loadSite(o.site).compare; } catch { /* config removed: defaults */ }
+  try { cfgCompare = (await loadSite(st, o.site)).compare; } catch { /* config removed: defaults */ }
 
   const redirectMap = readRedirectMap(o['redirect-map']);
   const opts = { redirectMap, ignore: cfgCompare.ignore, thresholds: cfgCompare.thresholds };
@@ -296,7 +340,7 @@ async function cmdCompare(o) {
       console.error(yellow('--visual: una delle due scan non ha screenshot, confronto visivo parziale o assente'));
     }
     const { visualDiffs } = await import('./visual.js');
-    const visual = visualDiffs(result, base, head, scanDir(o.site, baseId), scanDir(o.site, headId), (m) => console.error(dim(m)));
+    const visual = await visualDiffs(result, base, head, st, (m) => console.error(dim(m)));
     result = compareScans(base, head, { ...opts, visual });
     result.visual = visual;
   }
@@ -330,7 +374,39 @@ async function cmdCompare(o) {
   return failed ? 1 : 0;
 }
 
-const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, ui: cmdUi, inventory: cmdInventory, export: cmdExport, pdf: cmdPdf, compare: cmdCompare };
+async function cmdMonitor(o, positionals) {
+  if (positionals[0] === 'telegram-webhook') {
+    // registers the webhook of the deploy's bot (spec §12.5): Telegram calls it with the secret token
+    const { publicBaseUrl, telegramApi } = await import('./monitor/channels.js');
+    const token = process.env.SITESCANNER_TELEGRAM_BOT_TOKEN, secret = process.env.SITESCANNER_TELEGRAM_WEBHOOK_SECRET;
+    if (!token || !secret) throw new UserError('Servono SITESCANNER_TELEGRAM_BOT_TOKEN e SITESCANNER_TELEGRAM_WEBHOOK_SECRET (e SITESCANNER_PUBLIC_URL)');
+    const url = `${positionals[1] || publicBaseUrl()}/api/telegram/webhook`;
+    const r = await fetch(`${telegramApi()}/bot${token}/setWebhook`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, secret_token: secret, allowed_updates: ['message', 'channel_post'] }) }).then((x) => x.json());
+    if (!r.ok) throw new UserError(`Telegram ha rifiutato il webhook: ${r.description || 'errore sconosciuto'}`);
+    console.log(`Webhook del bot impostato: ${url}`);
+    return 0;
+  }
+  if (positionals[0] !== 'run') throw new UserError('Uso: sitescanner monitor run | telegram-webhook [<url pubblico>]');
+  const { runRound, monitoringEnabled } = await import('./monitor/engine.js');
+  if (!monitoringEnabled()) throw new UserError('Il monitoraggio gira su Vercel; in locale, solo per sviluppo, con SITESCANNER_MONITOR_DEV=1');
+  const { initStorage } = await import('./storage/index.js');
+  const authStore = await initStorage();
+  let adminAreas = [''];
+  if (multiUserMode()) {
+    const [{ adminAreas: areasOf }, { Auth }] = await Promise.all([import('./server.js'), import('./auth/index.js')]);
+    adminAreas = await areasOf(new Auth(authStore));
+  }
+  const r = await runRound({ adminAreas });
+  console.log(`Giro di controllo: ${r.checked} monitor, ${r.failed} in errore${r.unreliable ? ' — scartato: rete del monitor non affidabile' : ''}, ${r.events.length} eventi (${r.durationMs} ms)`);
+  return 0;
+}
+
+async function cmdUserCommand(o, positionals) {
+  const { cmdUser } = await import('./users-cli.js');
+  return cmdUser(positionals, o);
+}
+
+const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, ui: cmdUi, inventory: cmdInventory, export: cmdExport, pdf: cmdPdf, compare: cmdCompare, user: cmdUserCommand, monitor: cmdMonitor };
 const ALIASES = { serve: 'ui' };
 
 export async function main(argv) {
@@ -356,12 +432,12 @@ export async function main(argv) {
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   try {
-    const { values } = parseArgs({ args: rest, options: { ...COMMON, ...SPECS[cmd] }, allowPositionals: false, strict: true });
+    const { values, positionals } = parseArgs({ args: rest, options: { ...COMMON, ...SPECS[cmd] }, allowPositionals: POSITIONALS.has(cmd), strict: true });
     if (values.help) {
       process.stdout.write(HELP);
       return 0;
     }
-    return await COMMANDS[cmd](values);
+    return await COMMANDS[cmd](values, positionals);
   } catch (e) {
     if (e instanceof UserError || e.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' || e.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' || e.code === 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL') {
       console.error(red(`Errore: ${e.message}`));

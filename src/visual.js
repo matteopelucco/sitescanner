@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 
@@ -10,10 +9,10 @@ function pad(png, w, h) {
   return out;
 }
 
-/** Pixel diff of two PNG files. Images of different size are padded with white before comparing. */
+/** Pixel diff of two PNG images (file paths or buffers). Images of different size are padded with white before comparing. */
 export function diffImages(fileA, fileB, diffOut = null) {
-  const a = PNG.sync.read(fs.readFileSync(fileA));
-  const b = PNG.sync.read(fs.readFileSync(fileB));
+  const a = PNG.sync.read(Buffer.isBuffer(fileA) ? fileA : fs.readFileSync(fileA));
+  const b = PNG.sync.read(Buffer.isBuffer(fileB) ? fileB : fs.readFileSync(fileB));
   const w = Math.max(a.width, b.width), h = Math.max(a.height, b.height);
   const diff = diffOut ? new PNG({ width: w, height: h }) : null;
   const n = pixelmatch(pad(a, w, h), pad(b, w, h), diff ? diff.data : null, w, h, { threshold: 0.1 });
@@ -21,8 +20,11 @@ export function diffImages(fileA, fileB, diffOut = null) {
   return { ratio: n / (w * h), pixels: n, baseSize: [a.width, a.height], headSize: [b.width, b.height] };
 }
 
-/** Computes visual diffs for every matched pair with a screenshot on both sides. */
-export function visualDiffs(result, base, head, baseDir, headDir, log = () => {}) {
+/**
+ * Computes visual diffs for every matched pair with a screenshot on both sides.
+ * `st` is the storage of the area that holds both scans.
+ */
+export async function visualDiffs(result, base, head, st, log = () => {}) {
   const bp = new Map(base.pages.map((p) => [p.key, p]));
   const hp = new Map(head.pages.map((p) => [p.key, p]));
   const out = {};
@@ -31,7 +33,9 @@ export function visualDiffs(result, base, head, baseDir, headDir, log = () => {}
     const h = pair.headKey && hp.get(pair.headKey);
     if (!b || !h || !b.screenshot || !h.screenshot) continue;
     try {
-      out[pair.key] = diffImages(path.join(baseDir, b.screenshot), path.join(headDir, h.screenshot));
+      const [a, z] = await Promise.all([st.readScanFile(base.site, base.id, b.screenshot), st.readScanFile(head.site, head.id, h.screenshot)]);
+      if (!a || !z) throw new Error('screenshot mancante');
+      out[pair.key] = diffImages(a, z);
     } catch (e) {
       log(`diff visivo fallito per ${pair.key}: ${e.message}`);
     }

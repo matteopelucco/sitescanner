@@ -1,8 +1,9 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { dirs, loadSite, resolveEnv, adhocSite, UserError } from './config.js';
+import { loadSite, resolveEnv, adhocSite, UserError } from './config.js';
+import { storageFor } from './storage/index.js';
+import { areaPolicy, applyLimits } from './policy.js';
 import { newScanId } from './store.js';
-import { crawl } from './crawler.js';
+import { CrawlRun } from './crawler.js';
+import { runLocal } from './steps.js';
 import { TOOL } from './version.js';
 
 // Layout:
@@ -160,92 +161,83 @@ export function analyzeInventory(pages, seeds = { start: [], sitemap: [] }) {
   return { summary, tree: finishTree(tree), pages: records };
 }
 
-function invFile(id, ext = 'json') {
-  if (!/^[\w-]+$/.test(String(id))) throw new UserError(`Id inventario non valido: ${id}`);
-  return path.join(dirs.inventory, `${id}.${ext}`);
-}
+/**
+ * The inventory as a job in steps (spec §11.4): start (configuration, robots.txt, sitemaps), crawl in
+ * blocks, save. `o`: { site, env } or { url }, plus optional maxPages, maxDepth, concurrency.
+ */
+export const inventoryState = (o) => ({ kind: 'inventory', phase: 'start', o, id: newScanId() });
 
-function writeAtomic(file, content) {
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, content);
-  fs.renameSync(tmp, file);
-}
+export const inventoryJob = {
+  async step(s, { st, log = () => {}, onProgress = () => {}, signal = null, deadline = Infinity }) {
+    const o = s.o;
+    for (;;) {
+      if (s.phase === 'start') {
+        let cfg, env;
+        if (o.url) {
+          cfg = adhocSite(o.url);
+          env = resolveEnv(cfg, 'web');
+        } else {
+          if (!o.site || !o.env) throw new UserError('Indica un URL oppure sito e ambiente');
+          cfg = await loadSite(st, o.site);
+          env = resolveEnv(cfg, o.env);
+        }
+        cfg = {
+          ...cfg,
+          maxPages: o.maxPages || INVENTORY_DEFAULTS.maxPages,
+          maxDepth: o.maxDepth || INVENTORY_DEFAULTS.maxDepth,
+          concurrency: o.concurrency || cfg.concurrency,
+          storeText: false,
+        };
+        const policy = areaPolicy(st);
+        const limited = applyLimits(cfg, cfg.maxPages, policy);
+        cfg = { ...limited.cfg, maxPages: limited.maxPages };
+        for (const n of limited.notes) log(`Avviso: ${n}`);
+        Object.assign(s, { cfg, env, guard: !!policy?.guardNetwork, startedAt: new Date().toISOString() });
+        log(`Inventario ${env.baseUrl} → ${s.id}`);
+        s.crawl = (await CrawlRun.begin(cfg, env, { maxPages: cfg.maxPages, log, signal, onProgress, guardNetwork: s.guard })).state;
+        s.phase = 'crawl';
+      } else if (s.phase === 'crawl') {
+        const run = await CrawlRun.resume(s.crawl, s.cfg, s.env, { log, signal, onProgress, guardNetwork: s.guard });
+        if (!(await run.runBlock({ deadline }))) return { done: false };
+        const result = run.finish();
+        if (!result.pages.length) throw new UserError('Nessuna pagina trovata: controlla URL, include/exclude e robots.txt');
+        if (result.pages.every((p) => p.error)) throw new UserError(`Sito non raggiungibile (${result.pages[0].error}): inventario non salvato`);
+        onProgress({ phase: 'saving' });
+        const { summary, tree, pages } = analyzeInventory(result.pages, result.seeds);
+        const { cfg, env } = s;
+        const finishedAt = new Date();
+        const meta = {
+          schema: 1,
+          id: s.id,
+          site: o.url ? null : o.site,
+          env: o.url ? null : o.env,
+          baseUrl: env.baseUrl,
+          startedAt: s.startedAt,
+          finishedAt: finishedAt.toISOString(),
+          durationMs: finishedAt - Date.parse(s.startedAt),
+          tool: TOOL,
+          options: { maxPages: cfg.maxPages, maxDepth: cfg.maxDepth, concurrency: cfg.concurrency, respectRobots: cfg.respectRobots, sitemap: !!cfg.sitemap },
+          crawl: { truncated: result.unvisited > 0, unvisited: result.unvisited, start: result.seeds.start },
+          summary,
+        };
+        await st.saveInventory({ ...meta, tree, pages }, meta);
+        return { done: true, value: { ...meta, tree, pages } };
+      }
+      if (Date.now() >= deadline) return { done: false };
+    }
+  },
+
+  // Nothing is stored before the end.
+  async discard() {},
+};
 
 /**
  * Crawls a configured site (site + env) or any URL and stores the inventory.
  * @param {object} o { site, env } or { url }, plus optional maxPages, maxDepth, concurrency
- * @param {object} [hooks] { signal, onProgress, log }
+ * @param {object} [hooks] { signal, onProgress, log, storage, budgetMs }
  */
-export async function runInventory(o, { signal = null, onProgress = () => {}, log = () => {} } = {}) {
-  let cfg, env;
-  if (o.url) {
-    cfg = adhocSite(o.url);
-    env = resolveEnv(cfg, 'web');
-  } else {
-    if (!o.site || !o.env) throw new UserError('Indica un URL oppure sito e ambiente');
-    cfg = loadSite(o.site);
-    env = resolveEnv(cfg, o.env);
-  }
-  cfg = {
-    ...cfg,
-    maxPages: o.maxPages || INVENTORY_DEFAULTS.maxPages,
-    maxDepth: o.maxDepth || INVENTORY_DEFAULTS.maxDepth,
-    concurrency: o.concurrency || cfg.concurrency,
-    storeText: false,
-  };
-  const id = newScanId();
-  const startedAt = new Date();
-  log(`Inventario ${env.baseUrl} → ${id}`);
-  const result = await crawl(cfg, env, { maxPages: cfg.maxPages, log, signal, onProgress });
-  if (!result.pages.length) throw new UserError('Nessuna pagina trovata: controlla URL, include/exclude e robots.txt');
-  if (result.pages.every((p) => p.error)) throw new UserError(`Sito non raggiungibile (${result.pages[0].error}): inventario non salvato`);
-  onProgress({ phase: 'saving' });
-  const { summary, tree, pages } = analyzeInventory(result.pages, result.seeds);
-  const finishedAt = new Date();
-  const meta = {
-    schema: 1,
-    id,
-    site: o.url ? null : o.site,
-    env: o.url ? null : o.env,
-    baseUrl: env.baseUrl,
-    startedAt: startedAt.toISOString(),
-    finishedAt: finishedAt.toISOString(),
-    durationMs: finishedAt - startedAt,
-    tool: TOOL,
-    options: { maxPages: cfg.maxPages, maxDepth: cfg.maxDepth, concurrency: cfg.concurrency, respectRobots: cfg.respectRobots, sitemap: !!cfg.sitemap },
-    crawl: { truncated: result.unvisited > 0, unvisited: result.unvisited, start: result.seeds.start },
-    summary,
-  };
-  fs.mkdirSync(dirs.inventory, { recursive: true });
-  writeAtomic(invFile(id), JSON.stringify({ ...meta, tree, pages }));
-  writeAtomic(invFile(id, 'meta.json'), JSON.stringify(meta));
-  return { ...meta, tree, pages };
-}
-
-/** Summaries of the stored inventories, newest first. */
-export function listInventories() {
-  if (!fs.existsSync(dirs.inventory)) return [];
-  const out = [];
-  for (const f of fs.readdirSync(dirs.inventory)) {
-    if (!f.endsWith('.meta.json')) continue;
-    try {
-      out.push(JSON.parse(fs.readFileSync(path.join(dirs.inventory, f), 'utf8')));
-    } catch { /* ignore unreadable files */ }
-  }
-  return out.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
-}
-
-export function loadInventory(id) {
-  const f = invFile(id);
-  if (!fs.existsSync(f)) throw new UserError(`Inventario ${id} non trovato`);
-  return JSON.parse(fs.readFileSync(f, 'utf8'));
-}
-
-export function deleteInventory(id) {
-  const f = invFile(id);
-  if (!fs.existsSync(f)) throw new UserError(`Inventario ${id} non trovato`);
-  fs.rmSync(f);
-  fs.rmSync(invFile(id, 'meta.json'), { force: true });
+export async function runInventory(o, { signal = null, onProgress = () => {}, log = () => {}, storage: st = storageFor(), budgetMs } = {}) {
+  return runLocal(inventoryJob, inventoryState(o), { st, log, signal, onProgress }, budgetMs === undefined ? {} : { budgetMs });
 }
 
 const csvCell = (v) => {

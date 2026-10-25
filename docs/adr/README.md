@@ -19,3 +19,7 @@
 | 0013 | [Inventario del sito come crawl separato dalle scan, senza storico né confronto](0013-inventario-del-sito-come-crawl-separato-dalle-scan-senza-sto.md) | proposed | 2026-10-23 |
 | 0014 | [Catalogo delle regole di qualità registrato in ogni scan, per non scambiare regole nuove per regressioni](0014-catalogo-di-regole-di-qualita-registrato-in-ogni-scan.md) | proposed | 2026-10-24 |
 | 0015 | [PDF da un documento di stampa condiviso, impaginato con CSS paged media e reso da Chromium](0015-pdf-da-documento-di-stampa-condiviso-con-css-paged-media.md) | accepted | 2026-10-24 |
+| 0016 | [Accesso multi-utente con sessioni opache e password scrypt, senza librerie di autenticazione](0016-accesso-multi-utente-con-sessioni-opache-e-password-scrypt-s.md) | proposed | 2026-10-24 |
+| 0017 | [Storage a backend intercambiabili: filesystem in locale, Postgres e Vercel Blob su Vercel](0017-storage-a-backend-intercambiabili-filesystem-in-locale-postg.md) | proposed | 2026-10-24 |
+| 0018 | [Scan e inventari su Vercel come job a passi riprendibili su Vercel Queues](0018-scan-e-inventari-su-vercel-come-job-a-passi-riprendibili-su.md) | proposed | 2026-10-24 |
+| 0019 | [Monitoraggio a giri ogni 5 minuti, con disponibilità calcolata dal tempo coperto dai controlli](0019-monitoraggio-a-giri-ogni-5-minuti-con-disponibilita-calcolat.md) | proposed | 2026-10-25 |

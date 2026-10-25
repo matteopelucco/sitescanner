@@ -2,6 +2,8 @@
 
 `sitescanner ui` (vedi [§3.7](03-cli.md#37-ui-alias-serve)) avvia una web app locale per gestire i siti e lanciare scan e inventari senza usare il terminale. Il report di confronto resta quello statico di [§7](07-report.md), servito sotto `/report/`. Le motivazioni sono in [ADR-0011](../adr/0011-job-in-background-nel-processo-del-server-con-avanzamento-vi.md) e [ADR-0012](../adr/0012-server-locale-della-web-app-solo-loopback-controllo-di-host.md).
 
+Questa sezione descrive la modalità mono-utente. La modalità multi-utente (login, aree private, gestione degli utenti) è in [§10](10-utenti-e-accesso.md); l'esecuzione su Vercel, non ancora implementata, in [§11](11-vercel.md).
+
 ## 8.1 Siti
 
 | ID | Requisito |
