@@ -9,3 +9,5 @@ node_modules/
 /auth/
 /scouting/
 .vercel
+.env
+/monitoring/
