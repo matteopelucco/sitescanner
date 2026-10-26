@@ -64,3 +64,5 @@ Dipendenze: `yaml` (configurazione), `node-html-parser` (analisi HTML), `pngjs` 
 ## Ulteriori informazioni
 
 Se i formati dei dati crescono, valutare il controllo dei tipi via JSDoc e `tsc --checkJs` prima di introdurre una build.
+
+Eccezione: [ADR-0021](0021-librerie-d3-force-e-d3-hierarchy-incluse-nel-repository-per.md) ammette d3-force e d3-hierarchy, incluse come file nel repository, per il grafo della mappa del sito.

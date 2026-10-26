@@ -1,6 +1,6 @@
 # 9. Inventario
 
-Un inventario misura dimensione, struttura e profondità di un sito. Usa il crawler delle scan ([§4.1](04-scansione.md#41-perimetro-del-crawling)) ma è un oggetto separato: non entra nello storico, nel confronto né nel report ([ADR-0013](../adr/0013-inventario-del-sito-come-crawl-separato-dalle-scan-senza-sto.md)). Si avvia da CLI ([§3.8](03-cli.md#38-inventory)) o dalla web app ([§8](08-web-app.md)).
+Un inventario misura dimensione, struttura e profondità di un sito. Usa il crawler delle scan ([§4.1](04-scansione.md#41-perimetro-del-crawling)) ma è un oggetto separato: non entra nello storico, nel confronto né nel report ([ADR-0013](../adr/0013-inventario-del-sito-come-crawl-separato-dalle-scan-senza-sto.md)). Si avvia da CLI ([§3.8](03-cli.md#38-inventory)) o dalla web app ([§8](08-web-app.md)). La mappa del sito ([§14](14-mappa-del-sito.md), da implementare) estende la raccolta dei dati e aggiunge le viste di architettura.
 
 ## 9.1 Esecuzione
 
