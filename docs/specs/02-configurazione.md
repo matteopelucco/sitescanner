@@ -78,3 +78,4 @@ quality:
 | `quality.disable` | `[]` | Codici di issue di qualità da non calcolare (vedi [§4.4](04-scansione.md#44-issue-di-qualità)). |
 | `quality.severity` | `{}` | Severità diversa da quella predefinita per singoli codici (`error`, `warn`, `info`). |
 | `quality.<soglia>` | vedi §4.4 | `slowMs` (2000), `titleMin`/`titleMax` (30/65), `descriptionMin`/`descriptionMax` (70/170), `thinWords` (200), `maxClickDepth` (3), `maxDomNodes` (1500), `maxUrlLength` (115). |
+| `map.*` | vedi §14.4 | Opzioni della mappa del sito: host fratelli, rendering delle SPA, documenti, regioni dei link, aree e genitori (vedi [§14.4](14-mappa-del-sito.md#144-configurazione)). *(da implementare)* |

@@ -23,3 +23,5 @@
 | 0017 | [Storage a backend intercambiabili: filesystem in locale, Postgres e Vercel Blob su Vercel](0017-storage-a-backend-intercambiabili-filesystem-in-locale-postg.md) | proposed | 2026-10-24 |
 | 0018 | [Scan e inventari su Vercel come job a passi riprendibili su Vercel Queues](0018-scan-e-inventari-su-vercel-come-job-a-passi-riprendibili-su.md) | proposed | 2026-10-24 |
 | 0019 | [Monitoraggio a giri ogni 5 minuti, con disponibilità calcolata dal tempo coperto dai controlli](0019-monitoraggio-a-giri-ogni-5-minuti-con-disponibilita-calcolat.md) | proposed | 2026-10-25 |
+| 0020 | [Mappa del sito come vista dell'inventario esteso](0020-mappa-del-sito-come-vista-dell-inventario-esteso.md) | accepted | 2026-10-26 |
+| 0021 | [Librerie d3-force e d3-hierarchy incluse nel repository per il grafo della mappa](0021-librerie-d3-force-e-d3-hierarchy-incluse-nel-repository-per.md) | accepted | 2026-10-26 |
