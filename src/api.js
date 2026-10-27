@@ -4,6 +4,7 @@ import { storageFor } from './storage/index.js';
 import { startJob, listJobs, listJobsOf, jobDetail, cancelJobOf, jobView, onJobChange, runningJobsOf } from './jobs.js';
 import { buildReport } from './report/build.js';
 import { inventoryCsv, INVENTORY_DEFAULTS } from './inventory.js';
+import { exportMap, mapOf, overlayOf, previewRules, saveOverlay, importPreviousNotes, writeRulesToSite } from './mapservice.js';
 import { TOOL } from './version.js';
 import { renderPdf } from './pdf.js';
 import { handleMonitorApi } from './monitor/api.js';
@@ -186,7 +187,37 @@ export async function handleApi(req, res, url, ctx = {}) {
       res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="inventario-${inv.id}.csv"` });
       return res.end(inventoryCsv(inv));
     }
-    if (b && m === 'GET') return send(res, 200, await st.loadInventory(b));
+    // the latest scan of the same site that contains a page (RF-MAP-145), at most the 5 newest are looked at
+    if (b && c === 'diagnostic' && m === 'GET') {
+      const inv = await st.loadInventory(b);
+      const key = url.searchParams.get('key') || '';
+      if (!inv.site || !key.startsWith('/')) return send(res, 200, { scan: null });
+      const scans = (await st.listScans(inv.site)).reverse().slice(0, 5);
+      for (const s of scans) {
+        const scan = await st.loadScan(inv.site, s.id);
+        if ((scan.pages || []).some((p) => p.key === key)) return send(res, 200, { scan: s.id, site: inv.site, url: `/report/#${new URLSearchParams({ site: inv.site, base: s.id, page: key })}` });
+      }
+      return send(res, 200, { scan: null });
+    }
+    if (b && c === 'map' && m === 'GET') return send(res, 200, await mapOf(st, b));
+    // exports of the map: map.csv, map.json, map.md, map.zip (offline bundle), map.pdf (RF-MAP-175)
+    if (b && /^map\.(csv|json|md|html|zip|pdf)$/.test(c || '') && m === 'GET') {
+      const out = await exportMap(st, b, c.slice(4));
+      res.writeHead(200, { 'content-type': out.contentType, 'content-disposition': `attachment; filename="${out.fileName}"`, 'cache-control': 'no-store' });
+      return res.end(out.body);
+    }
+    if (b && c === 'map' && m === 'POST') return send(res, 200, await previewRules(st, b, (await readJson(req)).rules));
+    if (b && c === 'overlay' && m === 'GET') return send(res, 200, await overlayOf(st, b));
+    if (b && c === 'overlay' && m === 'PUT') return send(res, 200, await saveOverlay(st, b, await readJson(req)));
+    if (b && c === 'import-notes' && m === 'POST') return send(res, 200, await importPreviousNotes(st, b, (await readJson(req)).from || null));
+    // «Usa come regole del sito»: the rules in force of an inventory become those of a configured site
+    if (b && c === 'rules-to-site' && m === 'POST') {
+      const body = await readJson(req);
+      const map = await mapOf(st, b);
+      await writeRulesToSite(st, String(body.site || ''), map.rules);
+      return send(res, 200, { ok: true });
+    }
+    if (b && !c && m === 'GET') return send(res, 200, await st.loadInventory(b));
     if (b && m === 'DELETE') {
       await st.deleteInventory(b);
       return send(res, 200, { ok: true });

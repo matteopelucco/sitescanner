@@ -44,7 +44,7 @@ sitescanner list    [--site <id>]
 sitescanner label   --site <id> --scan <id> --label <txt> [--note <txt>]
 sitescanner report  [--site <id>] [--out report/]
 sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
-sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
+sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--documents pdf,docx] [--check-documents] [--no-siblings] [--render auto|never] [--import-notes] [--json out.json]
 sitescanner export  --site <id> --base <x> [--head <y>] --out bundle/
 sitescanner pdf     --site <id> --base <x> [--head <y>] [--out file.pdf] [--redirect-map f.csv]
 sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
@@ -251,6 +251,20 @@ Un crawl senza screenshot e senza confronto, con limiti alti (5000 URL, profondi
 sitescanner inventory --url https://www.example.com/ --max-pages 20000
 sitescanner inventory --site shop --env prod --json inventario.json
 ```
+
+### Mappa del sito
+
+Ogni inventario ha anche una **mappa del sito** ([§14](docs/specs/14-mappa-del-sito.md)): nel dettaglio dell'inventario, le schede **Panoramica**, **Grafo**, **Albero**, **Catalogo** e **Redirect ed ecosistema**, con filtri comuni (ricerca, aree, host, livello, solo navigazione globale o raggiungibili dai menu) e un ispettore per pagina. Per costruirla l'inventario raccoglie in più description, H1, parole, lingua, link divisi tra **navigazione** (header, nav, footer, aside, ruoli ARIA e i selettori di `map.navSelectors`, con ripiego sul modello comune alle pagine) e **contenuto**, documenti (PDF e simili, elencati e non visitati, con `--check-documents` verificati con una richiesta `HEAD`) e domini esterni. Con `map.siblings` (default) visita anche, a un solo livello, le pagine degli host fratelli (sottodomini del sito) senza seguire i loro link; le pagine che si generano nel browser (SPA) si aprono con Chromium se è installato (`map.render`, `--render never` per non usarlo).
+
+- **Aree e gerarchia** sono calcolate da sole; «Aree e gerarchia» nella Panoramica apre l'editor delle regole (aree, genitori, nome breve) con anteprima, da salvare con l'inventario o nel file del sito; «Sposta in area…» e «Imposta genitore…» creano la regola per una pagina.
+- **Note**: una nota generale e una per pagina, in testo semplice, accanto all'inventario; con `--import-notes` (o la casella nel form) si copiano dall'inventario precedente dello stesso sito.
+- **Export** (link «Esporta la mappa», API `/api/inventories/<id>/map.<formato>` o `sitescanner map`): CSV per Excel, JSON (schema in [`docs/specs/sitemap.schema.json`](docs/specs/sitemap.schema.json)), Markdown con diagramma Mermaid, **bundle offline** (ZIP che si apre da `file://`) e PDF.
+
+```sh
+sitescanner map --inventory latest --site shop --format pdf --out mappa.pdf
+```
+
+Le librerie del grafo (d3-force e d3-hierarchy, ISC) stanno in `src/web/vendor/` e si aggiornano con `node scripts/update-vendor.mjs` (`--check` verifica gli hash).
 
 Gli inventari non entrano nello storico delle scan né nel report.
 

@@ -89,12 +89,20 @@ function jsonLdTypes(v, out) {
 const attr = (el, name) => (el.getAttribute(name) || '').trim();
 const hasName = (el) => !!(attr(el, 'aria-label') || attr(el, 'aria-labelledby') || attr(el, 'title'));
 
+// Elements whose links are navigation, not content (RF-MAP-02).
+export const NAV_LANDMARKS = 'header, nav, footer, aside, [role="banner"], [role="navigation"], [role="contentinfo"], [role="complementary"]';
+
 /**
  * Parses an HTML document into the page record fields and the list of discovered links.
+ * Each link says whether it sits in a navigation region (`nav`), and `landmarks` whether the page has
+ * any such region at all (RF-MAP-02): the crawler stores this only when it collects the site map.
  * @param {string} html
  * @param {string} pageUrl final URL of the document (used to resolve relative links)
+ * @param {{navSelectors?: string[]}} [opts] extra selectors that count as navigation
  */
-export function analyzeHtml(html, pageUrl) {
+const APP_CONTAINERS = '#app, #root, [data-reactroot], [ng-version], #__next, #__nuxt';
+
+export function analyzeHtml(html, pageUrl, opts = {}) {
   const root = parse(html, { comment: false, blockTextElements: { script: true, style: true, noscript: true, pre: true } });
   const metas = (name) => root.querySelectorAll('meta[name]').filter((e) => attr(e, 'name').toLowerCase() === name);
   const meta = (name) => {
@@ -146,6 +154,7 @@ export function analyzeHtml(html, pageUrl) {
     href: resolve(e.getAttribute('href') || ''),
   }));
 
+  const navSelector = [NAV_LANDMARKS, ...(opts.navSelectors || [])].join(', ');
   const links = [];
   const anchors = { empty: 0, generic: 0 };
   for (const a of root.querySelectorAll('a[href]')) {
@@ -153,7 +162,7 @@ export function analyzeHtml(html, pageUrl) {
     if (!href || /^(javascript:|mailto:|tel:|data:|#)/i.test(href)) continue;
     const u = resolve(href);
     if (!u || !/^https?:/i.test(u)) continue;
-    links.push({ url: u, nofollow: /nofollow/i.test(a.getAttribute('rel') || '') });
+    links.push({ url: u, nofollow: /nofollow/i.test(a.getAttribute('rel') || ''), nav: !!a.closest(navSelector) });
     const imgAlt = a.querySelectorAll('img').map((i) => attr(i, 'alt')).join(' ').trim();
     const text = clean(a.textContent) || imgAlt || attr(a, 'aria-label') || attr(a, 'title');
     if (!text) anchors.empty++;
@@ -200,6 +209,12 @@ export function analyzeHtml(html, pageUrl) {
   const text = extractText(root);
   const wordCount = text ? text.split(/\s+/).filter(Boolean).length : 0;
 
+  // Probable client-side app (RF-MAP-20): almost no text, no H1, and an empty application container or only scripts
+  const emptyApp = root.querySelectorAll(APP_CONTAINERS).some((el) => !clean(el.textContent) && el.querySelectorAll('*').length === 0);
+  const bodyEls = root.querySelectorAll('body *');
+  const onlyScripts = bodyEls.length > 0 && bodyEls.every((e) => /^(script|noscript|style|link|meta|template)$/i.test(e.rawTagName)) && bodyEls.some((e) => /^script$/i.test(e.rawTagName));
+  const spaShell = wordCount < 30 && h1.length === 0 && (emptyApp || onlyScripts);
+
   return {
     page: {
       title: titles.length ? clean(titles[0].textContent) : null,
@@ -233,6 +248,8 @@ export function analyzeHtml(html, pageUrl) {
     },
     text,
     links,
+    landmarks: !!root.querySelector(navSelector),
+    spaShell,
   };
 }
 

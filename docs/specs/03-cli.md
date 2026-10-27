@@ -8,7 +8,7 @@ sitescanner list    [--site <id>]
 sitescanner label   --site <id> --scan <ref> --label <txt> [--note <txt>]
 sitescanner report  [--site <id>] [--out report/]
 sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
-sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
+sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--documents pdf,docx] [--check-documents] [--no-siblings] [--render auto|never] [--import-notes] [--json out.json]
 sitescanner export  --site <id> --base <ref> [--head <ref>] --out bundle/
 sitescanner pdf     --site <id> --base <ref> [--head <ref>] [--out file.pdf] [--redirect-map f.csv]
 sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
@@ -91,7 +91,8 @@ sitescanner compare --site <id> --base <ref> --head <ref> [--redirect-map f.csv]
 | ID | Requisito |
 |---|---|
 | RF-INVC-01 | È obbligatorio esattamente uno tra `--url` e `--site`; con `--site` serve anche `--env`. |
-| RF-INVC-02 | Esegue e salva un inventario (vedi [§9](09-inventario.md)); `--max-pages`, `--max-depth`, `--concurrency` (interi positivi) sostituiscono i default. |
+| RF-INVC-02 | Esegue e salva un inventario (vedi [§9](09-inventario.md)); `--max-pages`, `--max-depth`, `--concurrency` (interi positivi) sostituiscono i default. `--documents` (estensioni separate da virgola) e `--check-documents` sostituiscono `map.documentTypes` e `map.checkDocuments`; `--no-siblings` e `--render auto|never` sostituiscono `map.siblings` e `map.render` ([§14.4](14-mappa-del-sito.md#144-configurazione)). `--import-notes` copia le note dell'inventario precedente dello stesso sito (RF-MAP-162). Alla fine stampa il riepilogo della mappa (host, aree, navigazione globale, documenti, host fratelli, pagine renderizzate). |
+| RF-INVC-05 | `map --inventory <id\|latest> [--site <id>] --format csv\|json\|md\|html\|pdf [--out <file>]` scrive l'export della mappa di un inventario con le regole e le note in vigore ([§14.7](14-mappa-del-sito.md#147-export)); `latest` è l'ultimo inventario (del sito indicato). Senza `--out` il file si chiama `mappa-<host>-<data>.<estensione>` nella cartella corrente. Il PDF richiede Chromium. |
 | RF-INVC-03 | Stampa: URL visitati e pagine HTML, conteggi per classe di status, profondità di click (max, media, istogramma), profondità URL, pagine non collegate, dati della sitemap, le prime 15 sezioni e l'eventuale troncamento. |
 | RF-INVC-04 | `--json out.json` scrive l'inventario completo; `--quiet`/`-q` sopprime l'avanzamento. |
 

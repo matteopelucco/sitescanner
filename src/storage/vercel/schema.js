@@ -194,6 +194,14 @@ export const MIGRATIONS = [
       CREATE INDEX mon_agent_jobs_agent ON mon_agent_jobs (agent_id, state, created_at);
     `,
   },
+  {
+    version: 10,
+    name: 'regole e note della mappa del sito, accanto all\'inventario (§14.6)',
+    // Additive: the overlay is mutable, the inventory (in Blob) is not.
+    sql: `
+      ALTER TABLE inventories ADD COLUMN IF NOT EXISTS overlay jsonb;
+    `,
+  },
 ];
 
 // Any number would do, as long as it is fixed: it identifies the migration lock.

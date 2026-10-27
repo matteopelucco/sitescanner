@@ -152,6 +152,17 @@ for (const backend of BACKENDS) {
       await st.saveInventory({ ...meta('I2', '2026-01-02'), pages: [] }, meta('I2', '2026-01-02'));
       assert.deepEqual((await st.listInventories()).map((i) => i.id), ['I2', 'I1'], 'newest first');
       assert.equal((await st.loadInventory('I1')).pages[0].key, '/');
+      // rules and notes live beside the inventory (spec §14.6): none at first, replaced as a whole, isolated per area, gone with it
+      assert.equal(await st.readInventoryOverlay('I1'), null);
+      const saved = await st.writeInventoryOverlay('I1', { version: 1, rules: { areas: [{ name: 'A', match: ['/a'] }] }, notes: { general: 'x', pages: { '/': 'home' } } });
+      assert.ok(saved.updatedAt);
+      assert.equal((await st.readInventoryOverlay('I1')).notes.pages['/'], 'home');
+      await st.writeInventoryOverlay('I1', { version: 1, rules: null, notes: { general: '', pages: {} } });
+      assert.equal((await st.readInventoryOverlay('I1')).rules, null);
+      assert.equal(await st.readInventoryOverlay('I2'), null, 'another inventory is not touched');
+      await assert.rejects(st.writeInventoryOverlay('nope', {}), /non trovato/);
+      await assert.rejects(st.readInventoryOverlay('../x'), /non valido/);
+      assert.equal((await st.loadInventory('I1')).pages[0].key, '/', 'the inventory itself does not change');
       await st.deleteInventory('I1');
       assert.deepEqual((await st.listInventories()).map((i) => i.id), ['I2']);
       await assert.rejects(st.loadInventory('I1'), /non trovato/);

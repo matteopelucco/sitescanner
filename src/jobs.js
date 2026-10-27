@@ -184,6 +184,15 @@ function defineJob(p) {
   }
   if (p.type === 'inventory') {
     const o = { maxPages: positive(p.maxPages, 'maxPages'), maxDepth: positive(p.maxDepth, 'maxDepth'), concurrency: positive(p.concurrency, 'concurrency') };
+    // what the inventory collects for the site map (spec §14.4); the rest comes from the site's configuration
+    const m = p.map && typeof p.map === 'object' ? p.map : {};
+    const map = {};
+    if (Array.isArray(m.documentTypes)) map.documentTypes = m.documentTypes.map(String);
+    if (m.checkDocuments !== undefined) map.checkDocuments = !!m.checkDocuments;
+    if (m.siblings !== undefined) map.siblings = !!m.siblings;
+    if (m.render === 'auto' || m.render === 'never') map.render = m.render;
+    if (Object.keys(map).length) o.map = map;
+    if (p.importNotes) o.importNotes = true;
     if (p.url) Object.assign(o, { url: String(p.url).trim() });
     else if (p.site && p.env) Object.assign(o, { site: p.site, env: p.env });
     else throw new UserError('Per un inventario serve un URL oppure sito e ambiente');
