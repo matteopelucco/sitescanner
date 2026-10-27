@@ -10,6 +10,12 @@ export const HOUR = 3600 * 1000;
 export const DAY = 24 * HOUR;
 export const MONITOR_INTERVALS = [5, 10, 15, 30, 60];
 
+/** «slow» is the outcome name of the first version: it means degraded. */
+export const isDegraded = (outcome) => outcome === 'degraded' || outcome === 'slow';
+
+/** Whether alerts of a monitor are muted at time `t` (RF-RIS-03); `muted.until` null means until unmuted. */
+export const isMuted = (m, t) => !!(m && m.muted && (m.muted.until == null || m.muted.until > t));
+
 // ---------------- intervals ----------------
 
 /** Sorted, merged copy of a list of intervals. */
@@ -103,6 +109,19 @@ export function percentile(values, p) {
 
 // ---------------- aggregates ----------------
 
+const PHASE_KEYS = ['dnsMs', 'tcpMs', 'tlsMs', 'waitMs', 'downloadMs'];
+
+/** Sums of the phases of the runs that got an answer, with their count (for the average per phase). */
+export function phaseSums(checks) {
+  const out = { n: 0, dnsMs: 0, tcpMs: 0, tlsMs: 0, waitMs: 0, downloadMs: 0 };
+  for (const c of checks) {
+    if (!c.phases || c.outcome === 'error') continue;
+    out.n++;
+    for (const k of PHASE_KEYS) out[k] += c.phases[k] || 0;
+  }
+  return out;
+}
+
 /**
  * Hourly aggregates of one monitor for the complete hours in [fromHour, toHour): the same numbers
  * the KPIs use, so that KPIs from aggregates equal KPIs from raw data (RF-KPI-07).
@@ -112,12 +131,12 @@ export function hourlyAggregates({ checks, monitored, downtime, fromHour, toHour
   const out = [];
   for (let h = fromHour; h < toHour; h += HOUR) {
     const cs = checks.filter((c) => c.at >= h && c.at < h + HOUR);
-    const okMs = cs.filter((c) => c.outcome !== 'error').map((c) => c.ms);
+    const okMs = cs.filter((c) => c.outcome !== 'error' && c.ms != null).map((c) => c.ms); // a heartbeat without /start has no length
     out.push({
       hour: h,
       checks: cs.length,
       ok: cs.filter((c) => c.outcome === 'ok').length,
-      slow: cs.filter((c) => c.outcome === 'slow').length,
+      degraded: cs.filter((c) => isDegraded(c.outcome)).length,
       errors: cs.filter((c) => c.outcome === 'error').length,
       msSum: okMs.reduce((s, x) => s + x, 0),
       msCount: okMs.length,
@@ -125,6 +144,7 @@ export function hourlyAggregates({ checks, monitored, downtime, fromHour, toHour
       maxMs: okMs.length ? Math.max(...okMs) : null,
       p95Ms: percentile(okMs, 0.95),
       hist: histogram(okMs),
+      phases: phaseSums(cs),
       monitoredMs: total(clip(monitored, h, h + HOUR)),
       downtimeMs: total(clip(downtime, h, h + HOUR)),
     });
@@ -137,9 +157,12 @@ export function dailyAggregates(hourly) {
   const days = new Map();
   for (const a of hourly) {
     const d = Math.floor(a.hour / DAY) * DAY;
-    const cur = days.get(d) || { day: d, checks: 0, ok: 0, slow: 0, errors: 0, msSum: 0, msCount: 0, monitoredMs: 0, downtimeMs: 0, hist: new Array(BOUNDS.length).fill(0) };
-    for (const k of ['checks', 'ok', 'slow', 'errors', 'msSum', 'msCount', 'monitoredMs', 'downtimeMs']) cur[k] += a[k];
+    const cur = days.get(d) || { day: d, checks: 0, ok: 0, degraded: 0, errors: 0, msSum: 0, msCount: 0, monitoredMs: 0, downtimeMs: 0, hist: new Array(BOUNDS.length).fill(0) };
+    for (const k of ['checks', 'ok', 'errors', 'msSum', 'msCount', 'monitoredMs', 'downtimeMs']) cur[k] += a[k];
+    cur.degraded += (a.degraded || 0) + (a.slow || 0); // aggregates of the first version counted them as «slow»
     cur.hist = addHistograms(cur.hist, a.hist);
+    cur.phases = cur.phases || { n: 0, dnsMs: 0, tcpMs: 0, tlsMs: 0, waitMs: 0, downloadMs: 0 };
+    if (a.phases) for (const k of ['n', ...PHASE_KEYS]) cur.phases[k] += a.phases[k] || 0;
     days.set(d, cur);
   }
   return [...days.values()].sort((a, b) => a.day - b.day);
@@ -170,9 +193,9 @@ export function kpis({ from, to, monitoredMs, downtimeMs, incidents, now, respon
   if (responses) {
     if (responses.values) {
       const v = responses.values;
-      response = v.length ? { avg: Math.round(v.reduce((s, x) => s + x, 0) / v.length), median: percentile(v, 0.5), p95: percentile(v, 0.95), count: v.length } : null;
+      response = v.length ? { avg: Math.round(v.reduce((s, x) => s + x, 0) / v.length), median: percentile(v, 0.5), p50: percentile(v, 0.5), p95: percentile(v, 0.95), p99: percentile(v, 0.99), count: v.length } : null;
     } else if (responses.count) {
-      response = { avg: Math.round(responses.sum / responses.count), median: histogramPercentile(responses.hist, 0.5), p95: histogramPercentile(responses.hist, 0.95), count: responses.count, approximate: true };
+      response = { avg: Math.round(responses.sum / responses.count), median: histogramPercentile(responses.hist, 0.5), p50: histogramPercentile(responses.hist, 0.5), p95: histogramPercentile(responses.hist, 0.95), p99: histogramPercentile(responses.hist, 0.99), count: responses.count, approximate: true };
     }
   }
   const period = to - Math.max(from, since);
@@ -205,7 +228,7 @@ export function errorBudget({ monthMs, downtimeMs, slaPct }) {
  * Health of a monitor on its last 30 days, with the reasons (RF-KPI-01).
  * @returns {{ level: 'buona'|'attenzione'|'critica', reasons: string[] }}
  */
-export function health({ status, k30, slaPct = 99.9, slowMs = null, certDays = null, budgetLeftMs = null }) {
+export function health({ status, k30, slaPct = 99.9, degradedMs = null, certDays = null, budgetLeftMs = null, degradedShare = 0, ageMs = Infinity }) {
   const critical = [], warn = [];
   if (status === 'down') critical.push('il sito è giù');
   const a = k30 && k30.availability;
@@ -214,9 +237,11 @@ export function health({ status, k30, slaPct = 99.9, slowMs = null, certDays = n
   if (certDays != null && certDays <= 7) critical.push(certDays < 0 ? 'certificato scaduto' : `il certificato scade tra ${certDays} giorni`);
   else if (certDays != null && certDays <= 14) warn.push(`il certificato scade tra ${certDays} giorni`);
   const p95 = k30 && k30.response && k30.response.p95;
-  if (slowMs && p95 != null && p95 > slowMs) warn.push(`tempo di risposta p95 ${p95} ms oltre la soglia di ${slowMs} ms`);
+  if (degradedMs && p95 != null && p95 > degradedMs) warn.push(`tempo di risposta p95 ${p95} ms oltre la soglia di ${degradedMs} ms`);
+  if (degradedShare > 0.1) warn.push(`degradato nel ${Math.round(degradedShare * 100)}% dei controlli delle ultime 24 ore`);
   if (budgetLeftMs != null && budgetLeftMs < 0 && !critical.length) warn.push('budget di errore del mese esaurito');
-  if (k30 && k30.coverage != null && k30.coverage < 0.5) warn.push('dati insufficienti: monitorato meno di metà del periodo');
+  // a monitor created yesterday has little data, which says nothing yet
+  if (k30 && k30.coverage != null && k30.coverage < 0.5 && ageMs > 2 * DAY) warn.push('dati insufficienti: monitorato meno di metà del periodo');
   if (critical.length) return { level: 'critica', reasons: critical.concat(warn) };
   if (warn.length) return { level: 'attenzione', reasons: warn };
   return { level: 'buona', reasons: [] };
@@ -278,17 +303,60 @@ export function zonedParts(t, tz) {
   return { y: Number(p.year), mo: Number(p.month) - 1, d: Number(p.day), wd: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday) };
 }
 
+/** Wall-clock time of an instant in a time zone: year, month (0-11), day, hours, minutes. */
+export function zonedClock(t, tz) {
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' });
+  const p = Object.fromEntries(f.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return { y: Number(p.year), mo: Number(p.month) - 1, d: Number(p.day), hh: Number(p.hour), mi: Number(p.minute) };
+}
+
+const daysInMonth = (y, mo) => new Date(Date.UTC(y, mo + 1, 0)).getUTCDate();
+export const REPEAT_UNITS = { day: { label: 'giorni', max: 365 }, week: { label: 'settimane', max: 52 }, month: { label: 'mesi', max: 12 } };
+
+/**
+ * The occurrences of a window that repeats every N days, weeks or months from `start`, at the same wall-clock time in `tz` (so across
+ * the change of summer time it stays at the same hour of the clock), until `until` (RF-MNT-10). A monthly one that starts on the 31st
+ * falls on the last day of the shorter months.
+ */
+function repeatOccurrences(w, from, to, tz, dur) {
+  const every = Math.max(1, Number(w.every) || 1);
+  const first = zonedClock(w.start, tz);
+  const until = w.until == null ? Infinity : Number(w.until);
+  const out = [];
+  // start near the interval asked for, not from the first occurrence: a window of years ago must not cost thousands of steps
+  const approx = w.unit === 'month' ? 30.44 * DAY : (w.unit === 'week' ? 7 : 1) * DAY;
+  let k = Math.max(0, Math.floor((from - dur - w.start) / (approx * every)) - 2);
+  for (; k < 100000; k++) {
+    let y, mo, d;
+    if (w.unit === 'month') {
+      const total = first.mo + k * every;
+      y = first.y + Math.floor(total / 12);
+      mo = total % 12;
+      d = Math.min(first.d, daysInMonth(y, mo));
+    } else {
+      const dt = new Date(Date.UTC(first.y, first.mo, first.d + k * every * (w.unit === 'week' ? 7 : 1)));
+      y = dt.getUTCFullYear(); mo = dt.getUTCMonth(); d = dt.getUTCDate();
+    }
+    const s = zonedTime(y, mo, d, first.hh, first.mi, tz);
+    if (s > until || s >= to + DAY) break;
+    if (s + dur > from && s >= w.start - 60000) out.push([s, s + dur]);
+  }
+  return out;
+}
+
 /**
  * Occurrences of a maintenance window that overlap [from, to) (RF-MNT-02):
  *   once:    { type: 'once', start (ms), durationMin }
  *   weekly:  { type: 'weekly', days: [0..6] (0 = Sunday), time: 'HH:MM', durationMin }
  *   monthly: { type: 'monthly', dayOfMonth: 1..31, time: 'HH:MM', durationMin }
+ *   repeat:  { type: 'repeat', start (ms), every: N, unit: 'day'|'week'|'month', until (ms)|null, durationMin }
  * `endedAt` (ms) closes the window early (RF-MNT-05). Recurring times are in `tz`.
  */
 export function windowOccurrences(w, from, to, tz = 'Europe/Rome') {
   const dur = w.durationMin * 60000;
   const out = [];
   if (w.type === 'once') out.push([w.start, w.start + dur]);
+  else if (w.type === 'repeat') out.push(...repeatOccurrences(w, from, to, tz, dur));
   else {
     const [hh, mm] = String(w.time || '00:00').split(':').map(Number);
     // walk the local days from one day before `from` (a window may start the day before)

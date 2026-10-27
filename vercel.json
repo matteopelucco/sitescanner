@@ -21,6 +21,38 @@
           "topic": "sitescanner-steps"
         }
       ]
+    },
+    "api/check/fra1.js": {
+      "regions": [
+        "fra1"
+      ],
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "{src/**,package.json}"
+    },
+    "api/check/lhr1.js": {
+      "regions": [
+        "lhr1"
+      ],
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "{src/**,package.json}"
+    },
+    "api/check/cdg1.js": {
+      "regions": [
+        "cdg1"
+      ],
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "{src/**,package.json}"
+    },
+    "api/check/iad1.js": {
+      "regions": [
+        "iad1"
+      ],
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "{src/**,package.json}"
     }
   },
   "rewrites": [

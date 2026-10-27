@@ -360,6 +360,7 @@ export async function cleanupOrphans(backend, { olderThanMs = 24 * 3600 * 1000, 
   const orphans = [];
   for (const b of await backend.blob.list('u/')) {
     if (now - b.uploadedAt.getTime() < olderThanMs) continue;
+    if (/^u\/[^/]+\/runs\//.test(b.pathname)) continue; // run details: removed by the retention of the monitoring
     const m = /^(u\/[^/]+\/[^/]+\/scans\/[^/]+\/)/.exec(b.pathname);
     const j = /^(u\/[^/]+\/jobs\/[^/]+\/)/.exec(b.pathname);
     if (m ? !scans.has(m[1]) : j ? !running.has(j[1]) : !invs.has(b.pathname)) orphans.push(b.pathname);

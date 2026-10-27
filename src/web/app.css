@@ -75,6 +75,8 @@ main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 20px 16px 40px; 
 .sev-e { color: var(--error); } .sev-w { color: var(--warn); } .sev-i { color: var(--info); }
 
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 16px; overflow-x: auto; }
+.tabs a { padding: 8px 12px; color: var(--muted); white-space: nowrap; text-decoration: none; border-bottom: 2px solid transparent; }
+.tabs a.on { color: var(--accent); border-bottom-color: var(--accent); }
 .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; cursor: pointer; color: var(--muted); white-space: nowrap; }
 .tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
 
@@ -215,3 +217,80 @@ table.kpi th:first-child { text-transform: none; font-size: 13px; color: var(--t
 .adv .fields { margin-top: 10px; }
 pre.excerpt { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; background: var(--panel-2); padding: 8px; border-radius: 6px; font-size: 12px; }
 .dialog { max-height: calc(100vh - 32px); overflow: auto; }
+.assertions > span { font-size: 12px; color: var(--muted); }
+.arow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.arow select, .arow input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; min-width: 0; }
+.arow input[name=as_property], .arow input[name=as_target] { flex: 1 1 140px; }
+.arow select[name=as_source] { width: 105px; }
+
+/* run detail */
+.pbar { display: flex; height: 9px; border-radius: 4px; overflow: hidden; background: var(--panel-2); min-width: 8px; }
+.pbar > i { display: block; height: 100%; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+.kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 6px 18px; margin-top: 10px; }
+.kv span { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
+.kv b { font-weight: 500; overflow-wrap: anywhere; }
+table.phases { width: auto; min-width: 280px; margin-top: 8px; }
+table.phases td, table.phases th { padding: 3px 12px 3px 0; border-bottom: 1px solid var(--line); }
+tr.on td { background: var(--accent-soft); }
+
+/* list of the monitors (spec §13.8) */
+.statustabs a .count { background: var(--line); color: var(--muted); margin-left: 4px; }
+.statustabs a.on .count { background: var(--accent); color: var(--panel); }
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--accent); }
+.recent { display: inline-flex; gap: 1px; align-items: flex-end; height: 18px; }
+.rb { display: inline-block; width: 4px; height: 18px; border-radius: 1px; background: var(--line); }
+.rb-o { background: #2e9e5b; }
+.rb-d { background: #e0952b; }
+.rb-e { background: #d64545; }
+.menu { position: relative; display: inline-block; }
+.menu summary { list-style: none; cursor: pointer; padding: 2px 8px; border-radius: 6px; font-size: 18px; line-height: 1; color: var(--muted); }
+.menu summary::-webkit-details-marker { display: none; }
+.menu[open] summary, .menu summary:hover { background: var(--line); }
+.menupop { position: fixed; z-index: 50; min-width: 190px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .15); padding: 4px; display: flex; flex-direction: column; }
+.menupop button, .menupop a { background: none; border: 0; text-align: left; padding: 7px 10px; border-radius: 5px; cursor: pointer; color: inherit; font: inherit; text-decoration: none; }
+.menupop button:hover, .menupop a:hover { background: var(--line); }
+.menupop button:disabled { opacity: .5; cursor: default; }
+.menupop .danger { color: #d64545; }
+.pager { justify-content: space-between; padding: 10px 4px 2px; }
+.btn.disabled { opacity: .5; pointer-events: none; }
+@media (max-width: 760px) {
+  .montable { display: block; }
+  .montable thead { display: none; }
+  .montable tbody, .montable tr, .montable td { display: block; width: 100%; }
+  .montable tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
+  .montable td { border: 0; padding: 2px 8px; text-align: left; }
+  .montable td.num { display: inline-block; width: auto; margin-right: 12px; }
+}
+
+/* choice of the type of monitor */
+.typechoice { display: grid; gap: 6px; margin-bottom: 8px; }
+.typecard { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.typecard:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.typecard span { grid-column: 2; }
+.dnsrow { margin-bottom: 4px; }
+.dnsrow input { flex: 1; min-width: 120px; }
+
+.tagdot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+/* workspaces (spec §13.10) */
+.wssel { max-width: 180px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.inviteform { margin-top: 8px; }
+body.readonly .btn.primary, body.readonly .btn.danger, body.readonly .bulkbar, body.readonly [data-act], body.readonly [data-row], body.readonly #monAdd { display: none !important; }
+
+/* the rest of the monitoring section under «Altro» */
+.tabs { position: relative; }
+.tabmore { position: relative; margin-left: auto; }
+.tabmore summary { list-style: none; cursor: pointer; padding: 8px 12px; color: var(--muted); white-space: nowrap; }
+.tabmore summary::-webkit-details-marker { display: none; }
+.tabmore.on summary { color: var(--accent); }
+.tabmore .menupop { position: absolute; right: 0; top: 100%; }
+.tabmore .menupop a { display: block; padding: 7px 10px; border-bottom: 0; }
+.tabmore .menupop a.on { color: var(--accent); }
+.comprow { margin-bottom: 6px; align-items: flex-start; }
+.comprow input.input { flex: 1; min-width: 140px; }
+.comprow select { flex: 2; min-width: 160px; }
+
+.menunote { padding: 7px 10px; color: var(--muted); font-size: 13px; }
+.notice.info { background: color-mix(in srgb, var(--accent) 10%, transparent); border-color: var(--accent); }

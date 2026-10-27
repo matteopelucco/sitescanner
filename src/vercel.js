@@ -43,3 +43,24 @@ export function createStepConsumer({ env = process.env } = {}) {
     return consumer(req, res);
   };
 }
+
+/**
+ * Function of a region that runs the checks asked by the main one (spec §13.6, RF-LOC-02): `POST /api/check/<location>`,
+ * signed with the internal secret. There is one entry per region in vercel.json, because a Function has one region.
+ */
+export function createCheckHandler({ env = process.env } = {}) {
+  const ready = initStorage({ env: { ...env, VERCEL: '1' } });
+  ready.catch(() => {}); // reported to each request below
+  return async (req, res) => {
+    try {
+      await ready;
+      const { handleInternalCheck } = await import('./monitor/api.js');
+      if (await handleInternalCheck(req, res, new URL(req.url, 'http://x'))) return;
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+    } catch (e) {
+      res.writeHead(e.status || 503, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: `Controllo non disponibile: ${e.message}` }));
+    }
+  };
+}

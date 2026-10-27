@@ -25,3 +25,7 @@
 | 0019 | [Monitoraggio a giri ogni 5 minuti, con disponibilità calcolata dal tempo coperto dai controlli](0019-monitoraggio-a-giri-ogni-5-minuti-con-disponibilita-calcolat.md) | proposed | 2026-10-25 |
 | 0020 | [Mappa del sito come vista dell'inventario esteso](0020-mappa-del-sito-come-vista-dell-inventario-esteso.md) | accepted | 2026-10-26 |
 | 0021 | [Librerie d3-force e d3-hierarchy incluse nel repository per il grafo della mappa](0021-librerie-d3-force-e-d3-hierarchy-incluse-nel-repository-per.md) | accepted | 2026-10-26 |
+| 0022 | [Segreti dello spazio di lavoro cifrati con AES-256-GCM e sostituiti solo al momento del run](0022-segreti-dello-spazio-di-lavoro-cifrati-con-aes-256-gcm-e-sos.md) | proposed | 2026-10-25 |
+| 0023 | [Spazi di lavoro condivisi con ruoli e token API, sopra le aree personali](0023-spazi-di-lavoro-condivisi-con-ruoli-e-token-api-sopra-le-are.md) | proposed | 2026-10-25 |
+| 0024 | [Controlli da più regioni con una Function per regione e richieste firmate](0024-controlli-da-piu-regioni-con-una-function-per-regione-e-rich.md) | proposed | 2026-10-25 |
+| 0025 | [Agente locale come località privata: il servizio mette in coda, l'agente chiede](0025-agente-locale-come-localita-privata-il-servizio-mette-in-cod.md) | proposed | 2026-10-26 |

@@ -87,6 +87,67 @@ export class FsAuthStore {
     await this.deleteSessions(id);
   }
 
+  // ---------------- workspaces and API tokens (spec §13.10) ----------------
+
+  async listWorkspaces() {
+    return this.read('workspaces', []);
+  }
+
+  async getWorkspace(id) {
+    return this.read('workspaces', []).find((w) => w.id === id) || null;
+  }
+
+  async saveWorkspace(w) {
+    return this.update('workspaces', [], (list) => {
+      const i = list.findIndex((x) => x.id === w.id);
+      if (i >= 0) list[i] = w;
+      else list.push(w);
+      return w;
+    });
+  }
+
+  async deleteWorkspace(id) {
+    return this.update('workspaces', [], (list) => {
+      const i = list.findIndex((x) => x.id === id);
+      if (i >= 0) list.splice(i, 1);
+    });
+  }
+
+  async listTokens(workspaceId) {
+    return this.read('tokens', []).filter((t) => t.workspaceId === workspaceId);
+  }
+
+  async saveToken(t) {
+    return this.update('tokens', [], (list) => {
+      list.push(t);
+      return t;
+    });
+  }
+
+  async getTokenByHash(hash) {
+    return this.read('tokens', []).find((t) => t.hash === hash) || null;
+  }
+
+  async touchToken(id, at) {
+    return this.update('tokens', [], (list) => {
+      const t = list.find((x) => x.id === id);
+      if (t) t.lastUsedAt = at;
+    });
+  }
+
+  async deleteToken(id) {
+    return this.update('tokens', [], (list) => {
+      const i = list.findIndex((x) => x.id === id);
+      if (i >= 0) list.splice(i, 1);
+    });
+  }
+
+  async deleteTokensOf(workspaceId) {
+    return this.update('tokens', [], (list) => {
+      for (let i = list.length - 1; i >= 0; i--) if (list[i].workspaceId === workspaceId) list.splice(i, 1);
+    });
+  }
+
   // ---------------- sessions ----------------
 
   async createSession(s) {

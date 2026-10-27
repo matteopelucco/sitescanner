@@ -93,3 +93,5 @@ Test di contratto dello storage su entrambi i backend (quello Vercel solo con va
 ## Ulteriori informazioni
 
 Mantiene i principi di ADR-0002 e ADR-0003 su un backend diverso. Su Vercel ADR-0007 (report statico con dati via script) vale per il formato dei dati, non per la loro generazione su disco.
+
+Uno spazio di lavoro condiviso è un'area come le altre (`ws_…`), vedi [ADR-0023](0023-spazi-di-lavoro-condivisi-con-ruoli-e-token-api-sopra-le-are.md): lo storage non cambia.

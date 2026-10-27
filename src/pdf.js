@@ -27,6 +27,14 @@ export async function renderPdf({ site, base, head = null, redirectMap = {}, sto
     version: TOOL.version,
   });
 
+  return { buffer: await htmlToPdf(html), baseId, headId, fileName: pdfFileName(site, baseId, headId) };
+}
+
+/**
+ * Renders a print document (HTML with @page rules) as a PDF with headless Chromium: the same engine for the reports of the
+ * scans and of the availability. Throws UserError with the way out if Playwright or Chromium are missing.
+ */
+export async function htmlToPdf(html) {
   const pw = await loadPlaywright();
   if (!pw) throw new UserError('Il PDF richiede Playwright: npm i playwright && npx playwright install chromium (in alternativa usa «PDF» nel report e stampa dal browser)');
   let browser;
@@ -39,8 +47,7 @@ export async function renderPdf({ site, base, head = null, redirectMap = {}, sto
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
     // @page rules give size, margins, running header and page numbers; outline = PDF bookmarks from headings
-    const buffer = await page.pdf({ preferCSSPageSize: true, printBackground: true, outline: true, tagged: true });
-    return { buffer, baseId, headId, fileName: pdfFileName(site, baseId, headId) };
+    return await page.pdf({ preferCSSPageSize: true, printBackground: true, outline: true, tagged: true });
   } finally {
     await browser.close();
   }

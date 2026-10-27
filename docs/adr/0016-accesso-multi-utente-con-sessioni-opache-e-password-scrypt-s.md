@@ -83,3 +83,5 @@ Test di [RNF-22](../specs/10-utenti-e-accesso.md#109-requisiti-non-funzionali): 
 ## Ulteriori informazioni
 
 Estende [ADR-0012](0012-server-locale-della-web-app-solo-loopback-controllo-di-host.md), che resta valida per la modalità mono-utente.
+
+Gli account restano così; gli spazi di lavoro condivisi e i token API stanno sopra, in [ADR-0023](0023-spazi-di-lavoro-condivisi-con-ruoli-e-token-api-sopra-le-are.md), senza cambiare questa decisione.

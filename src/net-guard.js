@@ -104,22 +104,27 @@ export async function hostBlocked(hostname) {
   }
 }
 
-let agent = null;
+const agents = new Map();
 
 /**
- * fetch for a crawl: the global one, or (guarded) undici's fetch with a dispatcher whose
- * connections go through guardedLookup.
+ * fetch for a crawl or a check: the global one, or undici's fetch with a dispatcher when a guard
+ * or network options are needed (RF-SEC-01, RF-RIS-06). Options: `insecure` (ignore certificate
+ * errors), `family` (4 or 6). With the guard, every connection goes through guardedLookup and
+ * redirects are followed here, so that every hop (IP literals included) is checked.
  */
-export async function crawlFetch(guarded) {
-  if (!guarded) return fetch;
+export async function crawlFetch(guarded, { insecure = false, family = 0 } = {}) {
+  if (!guarded && !insecure && !family) return fetch;
   const undici = await import('undici');
-  agent ||= new undici.Agent({ connect: { lookup: guardedLookup } });
-  // Redirects are followed here, so that every hop (IP literals included) is checked.
-  return async function guardedFetch(url, opts = {}) {
+  const key = `${guarded}|${insecure}|${family}`;
+  if (!agents.has(key)) {
+    agents.set(key, new undici.Agent({ connect: { ...(guarded ? { lookup: guardedLookup } : {}), ...(insecure ? { rejectUnauthorized: false } : {}), ...(family ? { family } : {}) } }));
+  }
+  const dispatcher = agents.get(key);
+  return async function crawlFetchWith(url, opts = {}) {
     let current = String(url);
     for (let hop = 0; ; hop++) {
-      assertUrlAllowed(current);
-      const res = await undici.fetch(current, { ...opts, redirect: 'manual', dispatcher: agent });
+      if (guarded) assertUrlAllowed(current);
+      const res = await undici.fetch(current, { ...opts, redirect: 'manual', dispatcher });
       const loc = res.headers.get('location');
       if (opts.redirect === 'manual' || res.status < 300 || res.status >= 400 || !loc) return res;
       if (hop >= 10) throw new TypeError('fetch failed', { cause: new Error('troppi redirect') });
