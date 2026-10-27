@@ -7,15 +7,15 @@ import { diagnoseScan, healthScore, issueLabel, ISSUE_CATEGORIES } from './diagn
 
 const PRINT_LIMITS = { findings: 400, pagesPerIssue: 25, worstPages: 40, nonIndexable: 80, addedRemoved: 100 };
 
-const pEsc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+export const pEsc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // Value of a CSS string (content: "…") built from untrusted text.
-const cssStr = (s) => `"${String(s ?? '').replace(/[\\"]/g, '\\$&').replace(/[\r\n]+/g, ' ')}"`;
-const pNum = (n) => (n == null ? '—' : Number(n).toLocaleString('it-IT'));
-const pDate = (iso) => (iso ? new Date(iso).toLocaleString('it-IT', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+export const cssStr = (s) => `"${String(s ?? '').replace(/[\\"]/g, '\\$&').replace(/[\r\n]+/g, ' ')}"`;
+export const pNum = (n) => (n == null ? '—' : Number(n).toLocaleString('it-IT'));
+export const pDate = (iso) => (iso ? new Date(iso).toLocaleString('it-IT', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const pSev = (s) => `<span class="sev ${s}">${s}</span>`;
 const more = (n, what) => (n > 0 ? `<p class="more">… e altre ${pNum(n)} ${what}: l'elenco completo è nel report interattivo.</p>` : '');
 
-const PRINT_CSS = `
+export const PRINT_CSS = `
 @page { size: A4; margin: 17mm 14mm 18mm; }
 * { box-sizing: border-box; }
 html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -81,7 +81,7 @@ td.muted, .muted { color: #5d6673; }
 const MARGIN_FONT = 'font: 7.5pt "Segoe UI", system-ui, Roboto, Arial, sans-serif; color: #5d6673;';
 const cols = (...widths) => `<colgroup>${widths.map((w) => `<col style="width:${w}%">`).join('')}</colgroup>`;
 
-function pageCss(siteName, kind, when) {
+export function pageCss(siteName, kind, when) {
   return `@page { @top-left { content: ${cssStr(`sitescanner · ${siteName}`)}; ${MARGIN_FONT} }
   @top-right { content: ${cssStr(`${kind} · ${when}`)}; ${MARGIN_FONT} }
   @bottom-right { content: "Pagina " counter(page) " di " counter(pages); ${MARGIN_FONT} } }
@@ -94,7 +94,7 @@ const scanBox = (title, s) => `<div class="box"><h4>${pEsc(title)}</h4>
   <div class="muted">${pNum((s.pages || []).length)} pagine${s.crawl && s.crawl.truncated ? ' (troncata a maxPages)' : ''}</div>
   ${s.note ? `<div class="muted">${pEsc(s.note)}</div>` : ''}</div>`;
 
-const kpi = (label, value, sub = '') => `<div class="kpi"><span>${pEsc(label)}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+export const kpi = (label, value, sub = '') => `<div class="kpi"><span>${pEsc(label)}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
 
 function statusBar(byStatus) {
   const parts = [['2xx', '#3c9a5f'], ['3xx', '#d39b2a'], ['4xx', '#d0533f'], ['5xx', '#9e2a2a'], ['fail', '#6b7280']];
@@ -103,7 +103,7 @@ function statusBar(byStatus) {
     <div class="legend">${parts.map(([k, c]) => `<i style="background:${c}"></i>${k === 'fail' ? 'non raggiungibili' : k} ${pNum(byStatus[k] || 0)}`).join('')}</div>`;
 }
 
-function printDocument(title, siteName, kind, when, body) {
+export function printDocument(title, siteName, kind, when, body) {
   return `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${pEsc(title)}</title>
 <style>${PRINT_CSS}
 ${pageCss(siteName, kind, when)}</style></head><body>${body}</body></html>`;

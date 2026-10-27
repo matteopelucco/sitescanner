@@ -1,10 +1,12 @@
-import { loadSite, resolveEnv, adhocSite, UserError } from './config.js';
+import { loadSite, resolveEnv, adhocSite, validateMap, UserError } from './config.js';
 import { storageFor } from './storage/index.js';
 import { areaPolicy, applyLimits } from './policy.js';
 import { newScanId } from './store.js';
 import { CrawlRun } from './crawler.js';
+import { crawlFetch, blockedError } from './net-guard.js';
 import { runLocal } from './steps.js';
 import { TOOL } from './version.js';
+import { importPreviousNotes } from './mapservice.js';
 
 // Layout:
 //   inventory/<id>.json        full inventory (summary + one record per URL)
@@ -21,6 +23,59 @@ function statusClass(p) {
   return `${String(p.status)[0]}xx`;
 }
 
+/**
+ * Template detection (RF-MAP-03): on pages without landmarks, links to destinations that appear on at least
+ * `ratio` of the HTML pages of the same host are navigation. Changes the page records in place.
+ * Needs a few pages to mean anything, so hosts with fewer than `minPages` are left as they are.
+ */
+export function applyTemplateRegions(pages, ratio = 0.8, minPages = 5) {
+  const byHost = new Map();
+  for (const p of pages) {
+    if (!p.contentLinks || !isOkHtml(p)) continue;
+    if (!byHost.has(p.host)) byHost.set(p.host, []);
+    byHost.get(p.host).push(p);
+  }
+  for (const list of byHost.values()) {
+    if (list.length < minPages) continue;
+    const count = new Map();
+    for (const p of list) for (const k of new Set([...p.contentLinks, ...p.navLinks])) count.set(k, (count.get(k) || 0) + 1);
+    const isTemplate = (k) => count.get(k) >= ratio * list.length;
+    for (const p of list) {
+      if (p.regions !== 'none') continue;
+      const moved = p.contentLinks.filter(isTemplate);
+      if (!moved.length) continue;
+      p.navLinks = [...new Set([...p.navLinks, ...moved])].sort();
+      p.contentLinks = p.contentLinks.filter((k) => !isTemplate(k));
+      p.regions = 'template';
+    }
+  }
+}
+
+// What the crawler collects for the site map (spec §14.2.1), present only on inventories made since then.
+function mapFields(p) {
+  if (p.contentLinks === undefined && p.redirectKind === undefined) return {};
+  const f = {
+    host: p.host,
+    description: p.description ?? undefined,
+    h1: p.h1 && p.h1.length ? p.h1[0] : undefined,
+    wordCount: p.wordCount,
+    lang: p.langPrimary ?? undefined,
+    hreflang: p.hreflang && p.hreflang.length ? p.hreflang : undefined,
+    canonical: p.canonical ?? undefined,
+    canonicalKey: p.canonicalKey ?? undefined,
+    regions: p.regions,
+    contentLinks: p.contentLinks,
+    navLinks: p.navLinks,
+    documents: p.documents && p.documents.length ? p.documents : undefined,
+    externalHosts: p.externalHosts && p.externalHosts.length ? p.externalHosts : undefined,
+    redirectKind: p.redirectKind,
+    spaShell: p.spaShell || undefined,
+    rendered: p.rendered || undefined,
+    renderError: p.renderError || undefined,
+  };
+  return Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined));
+}
+
 const segments = (key) => key.split('?')[0].split('/').filter(Boolean);
 
 function histogram(values) {
@@ -35,8 +90,14 @@ function histogram(values) {
  * so pages reached only through the sitemap count as not linked.
  * @param {object[]} pages crawler page records
  * @param {{start: string[], sitemap: string[]}} seeds page keys of start URLs and sitemap URLs
+ * @param {{[url: string]: object}} [docChecks] results of the HEAD requests on documents, by URL
+ * @param {{boundarySkipped?: string[]}} [extra] what the crawl left out (boundary pages over the limit)
  */
-export function analyzeInventory(pages, seeds = { start: [], sitemap: [] }) {
+export function analyzeInventory(allPages, seeds = { start: [], sitemap: [] }, docChecks = {}, extra = {}) {
+  // Boundary pages of sibling hosts (RF-MAP-11) are records for the site map: they stay out of the
+  // numbers, the tree and the click depth of the site itself.
+  const boundaryPages = allPages.filter((p) => p.boundary);
+  const pages = allPages.filter((p) => !p.boundary);
   const byKey = new Map(pages.map((p) => [p.key, p]));
   const out = new Map(pages.map((p) => [p.key, new Set()]));
   const inlinks = new Map(pages.map((p) => [p.key, new Set()]));
@@ -88,6 +149,32 @@ export function analyzeInventory(pages, seeds = { start: [], sitemap: [] }) {
       inlinks: inlinks.get(p.key).size,
       outlinks: out.get(p.key).size,
       inSitemap: inSitemap.has(p.key),
+      ...mapFields(p),
+    };
+  });
+
+  const boundaryRecords = boundaryPages.map((p) => {
+    const segs = segments(p.pathKey);
+    return {
+      key: p.pathKey,
+      boundary: true,
+      status: p.error ? null : p.status,
+      finalStatus: p.redirects.length ? p.finalStatus : undefined,
+      redirectTo: p.redirects.length ? p.finalUrl : undefined,
+      error: p.error || undefined,
+      contentType: p.contentType || null,
+      html: isOkHtml(p),
+      title: p.title || null,
+      bytes: p.bytes || null,
+      responseMs: p.responseMs,
+      clickDepth: null,
+      urlDepth: segs.length,
+      section: segs.length ? `/${segs[0]}` : '/',
+      inlinks: 0,
+      outlinks: 0,
+      inSitemap: false,
+      ...mapFields(p),
+      host: p.host,
     };
   });
 
@@ -158,7 +245,82 @@ export function analyzeInventory(pages, seeds = { start: [], sitemap: [] }) {
     topInlinks: top(html, 'inlinks'),
     deepest: top(linked, 'clickDepth'),
   };
-  return { summary, tree: finishTree(tree), pages: records };
+
+  // Documents, once per URL (RF-MAP-04) and the totals of what was collected for the site map.
+  const docs = new Map();
+  for (const p of allPages) {
+    for (const d of p.documents || []) {
+      if (!docs.has(d.url)) docs.set(d.url, { url: d.url, host: d.host, ext: d.ext, pages: 0, regions: new Set() });
+      const x = docs.get(d.url);
+      x.pages++;
+      x.regions.add(d.region);
+    }
+  }
+  const documents = [...docs.values()]
+    .map((d) => ({ ...d, regions: [...d.regions].sort(), ...(docChecks[d.url] ? { check: docChecks[d.url] } : {}) }))
+    .sort((a, b) => a.url.localeCompare(b.url));
+  if (pages.some((p) => p.contentLinks !== undefined)) {
+    const byExt = histogram(documents.map((d) => d.ext));
+    const checked = documents.filter((d) => d.check);
+    summary.map = {
+      regions: histogram(pages.filter((p) => p.regions).map((p) => p.regions)),
+      documents: { unique: documents.length, byExt, checked: checked.length, broken: checked.filter((d) => d.check.error || d.check.status >= 400).length },
+      externalHosts: new Set(allPages.flatMap((p) => p.externalHosts || [])).size,
+    };
+    const shells = allPages.filter((p) => p.spaShell);
+    if (shells.length) summary.map.spa = { shells: shells.length, rendered: shells.filter((p) => p.rendered).length, errors: shells.filter((p) => p.renderError).length };
+    if (boundaryPages.length || (extra.boundarySkipped || []).length) {
+      const skipped = {};
+      for (const id of extra.boundarySkipped || []) {
+        const host = id.split('/')[0];
+        skipped[host] = (skipped[host] || 0) + 1;
+      }
+      summary.map.siblings = {
+        visited: boundaryRecords.filter((r) => r.html).length,
+        pages: boundaryRecords.length,
+        hosts: [...new Set(boundaryRecords.map((r) => r.host))].sort(),
+        notVisited: skipped,
+      };
+    }
+  }
+  return { summary, tree: finishTree(tree), pages: [...records, ...boundaryRecords], documents };
+}
+
+/**
+ * HEAD requests on the documents found (RF-MAP-04), in the steps' time budget: `s.docs.idx` is where the
+ * next call resumes. Documents of the main host get the environment's credentials, the others none.
+ * @returns {Promise<boolean>} true when all are checked
+ */
+async function checkDocuments(s, { signal, onProgress, deadline }) {
+  const d = s.docs;
+  const { cfg, env } = s;
+  const fetchFn = await crawlFetch(s.guard);
+  const origin = new URL(env.baseUrl).origin;
+  const own = { ...env.headers };
+  if (env.auth && env.auth.username) own.authorization = 'Basic ' + Buffer.from(`${env.auth.username}:${env.auth.password || ''}`).toString('base64');
+  let started = 0;
+  const worker = async () => {
+    while (d.idx < d.urls.length && !signal?.aborted && (started === 0 || Date.now() < deadline)) {
+      const url = d.urls[d.idx++];
+      started++;
+      const headers = { 'user-agent': cfg.userAgent, accept: '*/*', ...(new URL(url).origin === origin ? own : {}) };
+      const timeout = AbortSignal.timeout(cfg.timeoutMs);
+      try {
+        const res = await fetchFn(url, { method: 'HEAD', headers, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+        const len = Number(res.headers.get('content-length'));
+        d.checks[url] = { status: res.status, contentType: (res.headers.get('content-type') || '').split(';')[0] || null, ...(len ? { bytes: len } : {}) };
+        await res.body?.cancel();
+      } catch (e) {
+        signal?.throwIfAborted();
+        d.checks[url] = { error: e.name === 'TimeoutError' ? `Timeout dopo ${cfg.timeoutMs} ms` : blockedError(e) ? 'destinazione non ammessa' : (e.cause && e.cause.code) || e.message };
+      }
+      onProgress({ phase: 'documents', done: d.idx, limit: d.urls.length });
+    }
+  };
+  onProgress({ phase: 'documents', done: d.idx, limit: d.urls.length });
+  await Promise.all(Array.from({ length: Math.max(1, cfg.concurrency) }, worker));
+  signal?.throwIfAborted();
+  return d.idx >= d.urls.length;
 }
 
 /**
@@ -187,7 +349,10 @@ export const inventoryJob = {
           maxDepth: o.maxDepth || INVENTORY_DEFAULTS.maxDepth,
           concurrency: o.concurrency || cfg.concurrency,
           storeText: false,
+          collectMap: true,
+          map: { ...cfg.map, ...(o.map || {}) },
         };
+        validateMap(cfg.map, cfg.map, 'inventario');
         const policy = areaPolicy(st);
         const limited = applyLimits(cfg, cfg.maxPages, policy);
         cfg = { ...limited.cfg, maxPages: limited.maxPages };
@@ -199,15 +364,26 @@ export const inventoryJob = {
       } else if (s.phase === 'crawl') {
         const run = await CrawlRun.resume(s.crawl, s.cfg, s.env, { log, signal, onProgress, guardNetwork: s.guard });
         if (!(await run.runBlock({ deadline }))) return { done: false };
+        const urls = [...new Set(run.state.pages.flatMap((p) => (p.documents || []).map((d) => d.url)))].sort().slice(0, s.cfg.map.maxDocuments);
+        if (s.cfg.map.checkDocuments && urls.length) {
+          s.docs = { urls, idx: 0, checks: {} };
+          s.phase = 'documents';
+        } else s.phase = 'save';
+      } else if (s.phase === 'documents') {
+        if (!(await checkDocuments(s, { signal, onProgress, deadline }))) return { done: false };
+        s.phase = 'save';
+      } else if (s.phase === 'save') {
+        const run = await CrawlRun.resume(s.crawl, s.cfg, s.env, { log, signal, onProgress, guardNetwork: s.guard });
         const result = run.finish();
         if (!result.pages.length) throw new UserError('Nessuna pagina trovata: controlla URL, include/exclude e robots.txt');
         if (result.pages.every((p) => p.error)) throw new UserError(`Sito non raggiungibile (${result.pages[0].error}): inventario non salvato`);
         onProgress({ phase: 'saving' });
-        const { summary, tree, pages } = analyzeInventory(result.pages, result.seeds);
+        applyTemplateRegions(result.pages, s.cfg.map.templateRatio);
+        const { summary, tree, pages, documents } = analyzeInventory(result.pages, result.seeds, s.docs ? s.docs.checks : {}, { boundarySkipped: result.boundarySkipped });
         const { cfg, env } = s;
         const finishedAt = new Date();
         const meta = {
-          schema: 1,
+          schema: 2,
           id: s.id,
           site: o.url ? null : o.site,
           env: o.url ? null : o.env,
@@ -216,12 +392,21 @@ export const inventoryJob = {
           finishedAt: finishedAt.toISOString(),
           durationMs: finishedAt - Date.parse(s.startedAt),
           tool: TOOL,
-          options: { maxPages: cfg.maxPages, maxDepth: cfg.maxDepth, concurrency: cfg.concurrency, respectRobots: cfg.respectRobots, sitemap: !!cfg.sitemap },
+          options: { maxPages: cfg.maxPages, maxDepth: cfg.maxDepth, concurrency: cfg.concurrency, respectRobots: cfg.respectRobots, sitemap: !!cfg.sitemap, map: cfg.map },
           crawl: { truncated: result.unvisited > 0, unvisited: result.unvisited, start: result.seeds.start },
           summary,
         };
-        await st.saveInventory({ ...meta, tree, pages }, meta);
-        return { done: true, value: { ...meta, tree, pages } };
+        await st.saveInventory({ ...meta, tree, pages, documents }, meta);
+        if (o.importNotes && !o.url) {
+          // notes of the previous inventory of the same site (RF-MAP-162); a failure here does not lose the inventory
+          try {
+            const r = await importPreviousNotes(st, s.id);
+            if (r.from) log(`Note importate da ${r.from}: ${r.copied} pagine${r.dropped.length ? `, ${r.dropped.length} di pagine scomparse non copiate` : ''}`);
+          } catch (e) {
+            log(`Note non importate: ${e.message}`);
+          }
+        }
+        return { done: true, value: { ...meta, tree, pages, documents } };
       }
       if (Date.now() >= deadline) return { done: false };
     }

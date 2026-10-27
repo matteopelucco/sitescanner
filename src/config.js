@@ -1,7 +1,10 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
+import { parse as parseHtml } from 'node-html-parser';
 import { QUALITY_DEFAULTS } from './analyze.js';
+import { checkRules } from './core/mapoverlay.js';
+import { DOCUMENT_TYPES } from './core/hosts.js';
 import { UserError, validSiteId } from './errors.js';
 
 export { UserError, validSiteId };
@@ -36,6 +39,8 @@ const DEFAULTS = {
   storeText: true,
   compare: { ignore: [], thresholds: {} },
   quality: { disable: [], severity: {} },
+  // Site map: what the inventory collects (spec §14.4)
+  map: { siblings: true, siblingHosts: [], siblingExclude: [], maxSiblingPages: 200, render: 'auto', maxRendered: 50, documentTypes: ['pdf'], checkDocuments: false, maxDocuments: 1000, navSelectors: [], templateRatio: 0.8, areas: [], parents: [], subareaMin: 3 },
 };
 
 const usesEnv = (v) => (typeof v === 'string' ? /\$\{\w+\}/.test(v) : v && typeof v === 'object' ? Object.values(v).some(usesEnv) : false);
@@ -76,6 +81,7 @@ export function parseSite(id, raw, where = `${id}.yml`, { allowEnv = true } = {}
     screenshots: { ...DEFAULTS.screenshots, ...(doc.screenshots || {}) },
     compare: { ...DEFAULTS.compare, ...(doc.compare || {}) },
     quality: { ...DEFAULTS.quality, ...(doc.quality || {}) },
+    map: { ...DEFAULTS.map, ...(doc.map && typeof doc.map === 'object' && !Array.isArray(doc.map) ? doc.map : {}) },
   };
   cfg.id = id;
   cfg.name = doc.name || id;
@@ -93,6 +99,7 @@ export function parseSite(id, raw, where = `${id}.yml`, { allowEnv = true } = {}
     }
   }
   validateQuality(cfg.quality, where);
+  validateMap(doc.map === undefined ? {} : doc.map, cfg.map, where);
   cfg.configHash = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
   return cfg;
 }
@@ -107,6 +114,45 @@ function validateQuality(q, where) {
   for (const k of Object.keys(QUALITY_DEFAULTS)) {
     if (q[k] != null && !(Number(q[k]) >= 0)) throw new UserError(`${where}: quality.${k} deve essere un numero ≥ 0`);
   }
+}
+
+/**
+ * Validates the `map` block (RF-MAP-90): what is collected by the inventory. Keys of later stages of the
+ * site map are accepted as they are.
+ */
+export function validateMap(raw, m, where = 'configurazione') {
+  const rules = checkRules({ areas: m.areas, parents: m.parents, titleAffix: m.titleAffix, subareaMin: m.subareaMin });
+  if (rules.errors.length) throw new UserError(`${where}: map.${rules.errors[0]}`);
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new UserError(`${where}: "map" deve essere un oggetto`);
+  const list = (k) => {
+    if (!Array.isArray(m[k])) throw new UserError(`${where}: map.${k} deve essere un elenco`);
+  };
+  if (typeof m.siblings !== 'boolean') throw new UserError(`${where}: map.siblings deve essere true o false`);
+  for (const k of ['siblingHosts', 'siblingExclude']) {
+    list(k);
+    for (const h of m[k]) {
+      if (typeof h !== 'string' || !/^[a-z0-9.-]+(:\d+)?$/i.test(h)) throw new UserError(`${where}: map.${k}: "${h}" non è un host`);
+    }
+  }
+  if (!Number.isInteger(m.maxSiblingPages) || m.maxSiblingPages < 0) throw new UserError(`${where}: map.maxSiblingPages deve essere un intero ≥ 0`);
+  if (m.render !== 'auto' && m.render !== 'never') throw new UserError(`${where}: map.render deve essere "auto" o "never"`);
+  if (!Number.isInteger(m.maxRendered) || m.maxRendered < 0) throw new UserError(`${where}: map.maxRendered deve essere un intero ≥ 0`);
+  if (m.siteDomain !== undefined && m.siteDomain !== null && !/^[a-z0-9.-]+$/i.test(String(m.siteDomain))) throw new UserError(`${where}: map.siteDomain: "${m.siteDomain}" non è un dominio`);
+  list('documentTypes');
+  for (const t of m.documentTypes) {
+    if (!DOCUMENT_TYPES.includes(t)) throw new UserError(`${where}: map.documentTypes: "${t}" non ammesso (ammessi: ${DOCUMENT_TYPES.join(', ')})`);
+  }
+  if (typeof m.checkDocuments !== 'boolean') throw new UserError(`${where}: map.checkDocuments deve essere true o false`);
+  if (!Number.isInteger(m.maxDocuments) || m.maxDocuments < 1) throw new UserError(`${where}: map.maxDocuments deve essere un intero positivo`);
+  list('navSelectors');
+  for (const sel of m.navSelectors) {
+    try {
+      parseHtml('<div></div>').querySelector(String(sel));
+    } catch (e) {
+      throw new UserError(`${where}: map.navSelectors: selettore CSS non valido "${sel}" (${e.message})`);
+    }
+  }
+  if (typeof m.templateRatio !== 'number' || !(m.templateRatio > 0 && m.templateRatio <= 1)) throw new UserError(`${where}: map.templateRatio deve essere un numero tra 0 (escluso) e 1`);
 }
 
 /** Configuration for a site that is not configured: defaults, one env, no screenshots. */
@@ -165,6 +211,7 @@ export function applySiteForm(raw, form) {
   if (form.screenshots) for (const [k, v] of Object.entries(form.screenshots)) put(['screenshots', k], v);
   if (form.compare && 'ignore' in form.compare) put(['compare', 'ignore'], form.compare.ignore);
   if (form.quality && 'disable' in form.quality) put(['quality', 'disable'], form.quality.disable);
+  if (form.map) for (const [k, v] of Object.entries(form.map)) put(['map', k], v);
   if (form.envs) {
     const names = Object.keys(form.envs);
     const cur = doc.get('envs');

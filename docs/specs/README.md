@@ -17,7 +17,7 @@ Versione di riferimento: **0.1.0**
 | 11 | [Esecuzione su Vercel](11-vercel.md) | Deploy, storage Postgres + Blob, job a passi, browser headless, limiti *(in parte implementato)* |
 | 12 | [Monitoraggio della disponibilità](12-monitoraggio.md) | Healthcheck dei siti, incidenti, notifiche email/Slack/Telegram, KPI e salute |
 | 13 | [Monitoraggio: evoluzione (v2)](13-monitoraggio-v2.md) | Esiti e soglie, asserzioni e API, fasi della richiesta, heartbeat/DNS/TCP/SSL, località, politica di allerta, team, segreti, status page, report, monitoring as code *(da implementare)* |
-| 14 | [Mappa del sito](14-mappa-del-sito.md) | Grafo, albero, catalogo e statistiche dell'architettura da un inventario esteso; aree, host fratelli, note, export *(da implementare)* |
+| 14 | [Mappa del sito](14-mappa-del-sito.md) | Grafo, albero, catalogo e statistiche dell'architettura da un inventario esteso; aree, host fratelli, note, export |
 
 ## Convenzioni
 

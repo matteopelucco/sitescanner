@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "sitemap.schema.json",
+  "title": "Mappa del sito (export JSON di sitescanner, spec §14.7 RF-MAP-171)",
+  "type": "object",
+  "required": ["schemaVersion", "inventory", "options", "rules", "support", "warnings", "summary", "areas", "subareas", "nodes", "edges", "redirects", "ecosystem", "documents", "notes"],
+  "properties": {
+    "schemaVersion": { "const": 1, "description": "Versione di questo schema: cambia solo se un campo cambia significato o sparisce." },
+    "tool": { "type": ["object", "null"], "description": "Nome e versione di sitescanner che ha prodotto il file." },
+    "inventory": {
+      "type": "object",
+      "required": ["id", "baseUrl", "startedAt"],
+      "properties": {
+        "id": { "type": "string" }, "site": { "type": ["string", "null"] }, "env": { "type": ["string", "null"] },
+        "baseUrl": { "type": "string" }, "startedAt": { "type": "string" }, "finishedAt": { "type": ["string", "null"] }
+      }
+    },
+    "options": { "type": "object", "description": "Opzioni di raccolta usate dall'inventario (inclusi i blocchi map)." },
+    "rules": {
+      "type": "object",
+      "description": "Regole in vigore al momento dell'export (§14.4).",
+      "properties": {
+        "areas": { "type": "array", "items": { "type": "object", "required": ["name", "match"], "properties": { "name": { "type": "string" }, "match": { "type": "array", "items": { "type": "string" } }, "host": { "type": "string" }, "color": { "type": "string" } } } },
+        "parents": { "type": "array", "items": { "type": "object", "required": ["match", "parent"], "properties": { "match": { "type": "array", "items": { "type": "string" } }, "parent": { "type": "string" }, "host": { "type": "string" } } } },
+        "titleAffix": { "oneOf": [{ "const": false }, { "type": "object", "additionalProperties": { "type": "string" } }] },
+        "subareaMin": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "support": {
+      "type": "object",
+      "description": "Quali dati ha l'inventario: gli schemi vecchi non hanno gli elenchi dei link.",
+      "properties": { "links": { "type": "boolean" }, "documents": { "type": "boolean" } }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "summary": {
+      "type": "object",
+      "required": ["root", "mainHost", "nodes"],
+      "properties": {
+        "root": { "type": ["string", "null"] }, "mainHost": { "type": "string" }, "siteDomain": { "type": "string" }, "nodes": { "type": "integer" },
+        "composition": { "type": "object" }, "links": { "type": "object" }, "content": { "type": "object" }, "documents": { "type": "object" }, "languages": { "type": "array" }
+      }
+    },
+    "areas": { "type": "array", "items": { "type": "object", "required": ["id", "name", "pages", "color"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "pages": { "type": "integer" }, "neutral": { "type": "boolean" }, "color": { "type": "object", "required": ["light", "dark"], "properties": { "light": { "type": "string" }, "dark": { "type": "string" } } } } } },
+    "subareas": { "type": "array", "items": { "type": "object", "required": ["id", "area", "name", "pages"], "properties": { "id": { "type": "string" }, "area": { "type": "string" }, "name": { "type": "string" }, "pages": { "type": "integer" } } } },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "key", "host", "url", "shortName", "level", "area", "children", "contentOut", "contentIn", "documents", "globalNav", "onlyFromMenus"],
+        "properties": {
+          "id": { "type": "string", "description": "key per l'host principale, host + key per un host fratello" },
+          "key": { "type": "string" }, "host": { "type": "string" }, "url": { "type": "string" },
+          "title": { "type": ["string", "null"] }, "shortName": { "type": "string" }, "h1": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] },
+          "wordCount": { "type": ["integer", "null"] }, "lang": { "type": ["string", "null"] }, "hreflang": { "type": "array" },
+          "status": { "type": ["integer", "null"] }, "clickDepth": { "type": ["integer", "null"] }, "inSitemap": { "type": "boolean" }, "bytes": { "type": ["integer", "null"] }, "regions": { "type": ["string", "null"] },
+          "parent": { "type": ["string", "null"] }, "parentKind": { "type": ["string", "null"], "description": "path, query, redirect, link, rule, root…" }, "reachedFrom": { "type": ["string", "null"] },
+          "level": { "type": "integer" }, "children": { "type": "array", "items": { "type": "string" } }, "subtree": { "type": "integer" }, "area": { "type": "string" },
+          "documents": { "type": "array", "items": { "type": "object", "required": ["url", "host", "ext"] } }, "externalHosts": { "type": "array", "items": { "type": "string" } },
+          "contentOut": { "type": "array", "items": { "type": "string" } }, "contentIn": { "type": "array", "items": { "type": "string" } },
+          "navOutCount": { "type": "integer" }, "navInCount": { "type": "integer" }, "totalOut": { "type": "integer" }, "totalIn": { "type": "integer" },
+          "globalNav": { "type": "boolean" }, "onlyFromMenus": { "type": "boolean" }
+        }
+      }
+    },
+    "edges": {
+      "type": "object",
+      "required": ["hierarchy", "content", "navigation"],
+      "properties": {
+        "hierarchy": { "type": "array", "items": { "$ref": "#/definitions/edge" } },
+        "content": { "type": "array", "items": { "$ref": "#/definitions/edge" } },
+        "navigation": { "type": "array", "items": { "$ref": "#/definitions/edge" } }
+      }
+    },
+    "redirects": { "type": "array", "items": { "type": "object", "required": ["id", "status", "finalUrl", "hops"], "properties": { "id": { "type": "string" }, "status": { "type": ["integer", "null"] }, "finalUrl": { "type": "string" }, "hops": { "type": "integer" }, "target": { "type": ["string", "null"] }, "crossHost": { "type": "boolean" }, "kind": { "type": ["string", "null"] } } } },
+    "ecosystem": { "type": "array", "items": { "type": "object", "required": ["host", "relation", "pages"], "properties": { "host": { "type": "string" }, "relation": { "enum": ["main", "sibling-visited", "sibling-not-visited", "external"] }, "pages": { "type": "integer" }, "visited": { "type": "integer" } } } },
+    "documents": { "type": "array", "items": { "type": "object", "required": ["url", "host", "ext"], "properties": { "url": { "type": "string" }, "host": { "type": "string" }, "ext": { "type": "string" }, "pages": { "type": "integer" }, "regions": { "type": "array" }, "check": { "type": "object" } } } },
+    "notes": { "type": "object", "required": ["general", "pages"], "properties": { "general": { "type": "string" }, "pages": { "type": "object", "additionalProperties": { "type": "string" } } } }
+  },
+  "definitions": {
+    "edge": { "type": "object", "required": ["source", "target"], "properties": { "source": { "type": "string" }, "target": { "type": "string" }, "type": { "type": "string" } } }
+  }
+}

@@ -26,7 +26,8 @@ const TYPES = {
 
 const webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 // Pure modules of src/core/ that the web app imports as they are (no dependencies, no I/O)
-const SHARED = { '/app/assertions.js': path.join(path.dirname(fileURLToPath(import.meta.url)), 'core', 'assertions.js') };
+const coreFile = (name) => path.join(path.dirname(fileURLToPath(import.meta.url)), 'core', name);
+const SHARED = { '/app/assertions.js': coreFile('assertions.js'), '/app/mapoverlay.js': coreFile('mapoverlay.js') };
 const appFile = (pathname) => (pathname === '/' ? path.join(webDir, 'index.html') : SHARED[pathname] || within(webDir, pathname.slice('/app'.length)));
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 // Files of the web app reachable without a session in multi-user mode (login page).

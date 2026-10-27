@@ -29,7 +29,7 @@ test('notifications: adding Teams, Discord and a webhook (the secret is shown on
     await page.waitForSelector('#addTeams');
     await page.fill('#addTeams [name=webhookUrl]', 'http://127.0.0.1:9/teams/abc123');
     await page.click('#addTeams button');
-    await page.waitForSelector('text=Microsoft Teams');
+    await page.waitForSelector('td .small.muted:text-is("Microsoft Teams")'); // the row, not the form's heading: the list is redrawn after each add
     await page.fill('#addDiscord [name=webhookUrl]', 'http://127.0.0.1:9/discord/xyz789');
     await page.click('#addDiscord button');
     await page.waitForSelector('td .small.muted:text-is("Discord")', { timeout: 5000 });

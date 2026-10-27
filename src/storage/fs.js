@@ -301,6 +301,26 @@ export class FsStorage {
     if (!fs.existsSync(f)) throw new UserError(`Inventario ${id} non trovato`);
     fs.rmSync(f);
     fs.rmSync(this.invFile(id, 'meta.json'), { force: true });
+    fs.rmSync(this.invFile(id, 'overlay.json'), { force: true });
+  }
+
+  /** Rules and notes of an inventory, kept beside it (spec §14.6); null while there are none. */
+  async readInventoryOverlay(id) {
+    if (!fs.existsSync(this.invFile(id))) throw new UserError(`Inventario ${id} non trovato`);
+    const f = this.invFile(id, 'overlay.json');
+    if (!fs.existsSync(f)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(f, 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  async writeInventoryOverlay(id, overlay) {
+    if (!fs.existsSync(this.invFile(id))) throw new UserError(`Inventario ${id} non trovato`);
+    const saved = { ...overlay, updatedAt: new Date().toISOString() };
+    writeAtomic(this.invFile(id, 'overlay.json'), JSON.stringify(saved));
+    return saved;
   }
 
   /** Removes the whole area (all sites, scans, inventories): used when an account is deleted. */

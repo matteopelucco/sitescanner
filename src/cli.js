@@ -10,6 +10,8 @@ import { healthScore } from './core/diagnose.js';
 import { buildReport } from './report/build.js';
 import { serve, multiUserMode } from './server.js';
 import { runInventory } from './inventory.js';
+import { buildSitemap } from './core/sitemap.js';
+import { exportMap, EXPORT_FORMATS } from './mapservice.js';
 import { TOOL } from './version.js';
 
 
@@ -28,7 +30,8 @@ Uso:
   sitescanner label   --site <id> --scan <id> --label <txt> [--note <txt>]
   sitescanner report  [--site <id>] [--out report/]
   sitescanner ui      [--port 4173] [--host 127.0.0.1] [--open]      (alias: serve)
-  sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--json out.json]
+  sitescanner inventory --url <url> | --site <id> --env <env> [--max-pages N] [--max-depth N] [--concurrency N] [--documents pdf,docx] [--check-documents] [--no-siblings] [--render auto|never] [--import-notes] [--json out.json]
+  sitescanner map     --inventory <id|latest> [--site <id>] --format csv|json|md|html|pdf [--out file]
   sitescanner export  --site <id> --base <x> [--head <y>] --out bundle/
   sitescanner pdf     --site <id> --base <x> [--head <y>] [--out file.pdf] [--redirect-map f.csv]
   sitescanner compare --site <id> --base <x> --head <y> [--redirect-map f.csv] [--fail-on error|warn] [--json out.json] [--visual]
@@ -60,7 +63,9 @@ const SPECS = {
   inventory: {
     url: { type: 'string' }, site: { type: 'string' }, env: { type: 'string' }, 'max-pages': { type: 'string' }, 'max-depth': { type: 'string' },
     concurrency: { type: 'string' }, json: { type: 'string' }, quiet: { type: 'boolean', short: 'q' },
+    documents: { type: 'string' }, 'check-documents': { type: 'boolean' }, 'no-siblings': { type: 'boolean' }, render: { type: 'string' }, 'import-notes': { type: 'boolean' },
   },
+  map: { inventory: { type: 'string' }, site: { type: 'string' }, format: { type: 'string' }, out: { type: 'string' } },
   export: { site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, out: { type: 'string' } },
   pdf: { site: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, out: { type: 'string' }, 'redirect-map': { type: 'string' } },
   compare: {
@@ -270,6 +275,16 @@ async function cmdInventory(o) {
     url: o.url, site: o.site, env: o.env,
     maxPages: positiveInt(o['max-pages'], 'max-pages'), maxDepth: positiveInt(o['max-depth'], 'max-depth'), concurrency: positiveInt(o.concurrency, 'concurrency'),
   };
+  const map = {};
+  if (o.documents) map.documentTypes = o.documents.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  if (o['check-documents']) map.checkDocuments = true;
+  if (o['no-siblings']) map.siblings = false;
+  if (o.render) {
+    if (o.render !== 'auto' && o.render !== 'never') throw new UserError('--render: auto oppure never');
+    map.render = o.render;
+  }
+  if (Object.keys(map).length) opts.map = map;
+  if (o['import-notes']) opts.importNotes = true;
   const log = o.quiet ? () => {} : (m) => console.log(dim(m));
   const inv = await runInventory(opts, { log });
   const s = inv.summary;
@@ -282,12 +297,55 @@ async function cmdInventory(o) {
   console.log(bold('\nSezioni'));
   for (const x of s.sections.slice(0, 15)) console.log(`  ${pad(x.section, 30)} ${pad(x.pages, 7)} ${dim(`click max ${x.maxClickDepth ?? '-'} · media ${x.avgClickDepth ?? '-'}`)}`);
   if (s.sections.length > 15) console.log(dim(`  … altre ${s.sections.length - 15}`));
+  printMapSummary(inv);
   if (inv.crawl.truncated) console.log(yellow(`\nTroncato a ${inv.options.maxPages} URL: ${inv.crawl.unvisited} scoperti e non visitati (aumenta --max-pages)`));
   if (o.json) {
     fs.mkdirSync(path.dirname(path.resolve(o.json)), { recursive: true });
     fs.writeFileSync(o.json, JSON.stringify(inv, null, 2));
     console.log(dim(`\nRisultato JSON: ${path.resolve(o.json)}`));
   }
+  return 0;
+}
+
+/** What the site map shows at a glance (RF-MAP-182): nodes per host, areas, global navigation, documents, siblings, rendering. */
+function printMapSummary(inv) {
+  if (!inv.summary.map) return;
+  let m;
+  try {
+    m = buildSitemap(inv, {});
+  } catch {
+    return;
+  }
+  if (!m.nodes.length) return;
+  const st = m.stats;
+  console.log(bold('\nMappa del sito'));
+  console.log(`  Nodi per host: ${st.composition.byHost.map((h) => `${h.host} ${h.pages}`).join(' · ')}`);
+  if (m.areas.length) console.log(`  Aree: ${m.areas.slice(0, 10).map((a) => `${a.name} ${a.pages}`).join(' · ')}${m.areas.length > 10 ? dim(` … altre ${m.areas.length - 10}`) : ''}`);
+  if (m.support.links) console.log(`  Navigazione globale: ${st.links.globalNavPages} voci · raggiungibili solo dai menu: ${st.links.onlyFromMenus}`);
+  console.log(`  Documenti unici: ${st.documents.unique}`);
+  const sib = inv.summary.map.siblings;
+  if (sib) console.log(`  Host fratelli visitati: ${sib.hosts.join(', ')} (${sib.visited} pagine di confine)${Object.keys(sib.notVisited).length ? yellow(` · non visitate: ${Object.entries(sib.notVisited).map(([h, n]) => `${h} ${n}`).join(', ')}`) : ''}`);
+  const spa = inv.summary.map.spa;
+  if (spa) console.log(`  Pagine SPA: ${spa.shells} · renderizzate ${spa.rendered}${spa.errors ? yellow(` · senza rendering ${spa.errors} (browser non disponibile o errore)`) : ''}`);
+  for (const w of m.warnings) console.log(yellow(`  Avviso: ${w}`));
+}
+
+/** `map`: an export of the site map of an inventory (spec §14.9, RF-MAP-181). */
+async function cmdMap(o) {
+  need(o, 'inventory', 'format');
+  if (!EXPORT_FORMATS[o.format]) throw new UserError(`--format: ${Object.keys(EXPORT_FORMATS).join(', ')}`);
+  const st = storageFor();
+  let id = o.inventory;
+  if (id === 'latest') {
+    const list = (await st.listInventories()).filter((i) => !o.site || i.site === o.site);
+    if (!list.length) throw new UserError(o.site ? `Nessun inventario per il sito ${o.site}` : 'Nessun inventario salvato');
+    id = list[0].id;
+  }
+  const out = await exportMap(st, id, o.format);
+  const file = path.resolve(o.out || out.fileName);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, out.body);
+  console.log(`${green('✓ ')}${file} ${dim(`(inventario ${id})`)}`);
   return 0;
 }
 
@@ -500,7 +558,7 @@ async function cmdUserCommand(o, positionals) {
   return cmdUser(positionals, o);
 }
 
-const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, ui: cmdUi, inventory: cmdInventory, export: cmdExport, pdf: cmdPdf, compare: cmdCompare, user: cmdUserCommand, monitor: cmdMonitor };
+const COMMANDS = { init: cmdInit, scan: cmdScan, list: cmdList, label: cmdLabel, report: cmdReport, ui: cmdUi, inventory: cmdInventory, map: cmdMap, export: cmdExport, pdf: cmdPdf, compare: cmdCompare, user: cmdUserCommand, monitor: cmdMonitor };
 const ALIASES = { serve: 'ui' };
 
 export async function main(argv) {

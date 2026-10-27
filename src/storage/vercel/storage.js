@@ -252,6 +252,21 @@ export class VercelStorage {
     return JSON.parse(buf.toString('utf8'));
   }
 
+  async readInventoryOverlay(id) {
+    this.invPath(id); // validates the id
+    const rows = await (await this.db()).query('SELECT overlay FROM inventories WHERE area = $1 AND id = $2', [this.area, id]);
+    if (!rows.length) throw new UserError(`Inventario ${id} non trovato`);
+    return rows[0].overlay || null;
+  }
+
+  async writeInventoryOverlay(id, overlay) {
+    this.invPath(id);
+    const saved = { ...overlay, updatedAt: new Date().toISOString() };
+    const rows = await (await this.db()).query('UPDATE inventories SET overlay = $3::jsonb WHERE area = $1 AND id = $2 RETURNING id', [this.area, id, JSON.stringify(saved)]);
+    if (!rows.length) throw new UserError(`Inventario ${id} non trovato`);
+    return saved;
+  }
+
   async deleteInventory(id) {
     const p = this.invPath(id);
     const rows = await (await this.db()).query('DELETE FROM inventories WHERE area = $1 AND id = $2 RETURNING id', [this.area, id]);
