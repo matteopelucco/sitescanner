@@ -4,10 +4,23 @@ import { migrate } from './schema.js';
 // Both are behind small adapters, so the same storage code runs on the real services and, in tests,
 // on PGlite (Postgres in process) and an in-memory blob store.
 
-/** Adapter over postgres.js (`postgres` package). */
+/**
+ * The jsonb of postgres.js. The driver knows from the server that a parameter is jsonb and serializes it again, so the text
+ * that the stores already built with JSON.stringify would be saved as a JSON string: here a string is the JSON text as it is.
+ * What was saved that way (a string that holds an object) is read back as the object.
+ */
+export const PG_JSON_TYPES = {
+  json: { to: 114, from: [114], serialize: (x) => (typeof x === 'string' ? x : JSON.stringify(x)), parse: (x) => JSON.parse(x) },
+  jsonb: {
+    to: 3802, from: [3802], serialize: (x) => (typeof x === 'string' ? x : JSON.stringify(x)),
+    parse: (x) => { const v = JSON.parse(x); return typeof v === 'string' && /^\s*[[{]/.test(v) ? JSON.parse(v) : v; },
+  },
+};
+
+/** Adapter over postgres.js (`postgres` package). The driver refuses `undefined`: it is NULL, as in PGlite. */
 export function postgresDb(sql) {
   const wrap = (s) => ({
-    query: (text, params = []) => s.unsafe(text, params.map((p) => (p instanceof Date ? p.toISOString() : p))),
+    query: (text, params = []) => s.unsafe(text, params.map((p) => (p instanceof Date ? p.toISOString() : p === undefined ? null : p))),
     exec: (text) => s.unsafe(text),
   });
   return { ...wrap(sql), tx: (fn) => sql.begin((t) => fn(wrap(t))), close: () => sql.end({ timeout: 5 }) };
@@ -116,7 +129,7 @@ export async function vercelBackendFromEnv(env = process.env) {
   if (missing.length) throw new Error(`Configurazione mancante: ${missing.join(', ')}`);
   const [{ default: postgres }, sdk] = await Promise.all([import('postgres'), import('@vercel/blob')]);
   // One small pool per function instance; Neon's pooler handles the many instances.
-  const sql = postgres(env.DATABASE_URL || env.POSTGRES_URL, { max: 5, idle_timeout: 20, prepare: false, onnotice: () => {} });
+  const sql = postgres(env.DATABASE_URL || env.POSTGRES_URL, { max: 5, idle_timeout: 20, prepare: false, onnotice: () => {}, types: PG_JSON_TYPES });
   backend = new VercelBackend({ db: postgresDb(sql), blob: vercelBlob(sdk) });
   return backend;
 }
