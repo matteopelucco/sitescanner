@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startFixture } from './fixture-server.js';
-import { analyzeInventory } from '../src/inventory.js';
+import { analyzeInventory, inventoryCsv } from '../src/inventory.js';
 import { serve } from '../src/server.js';
 
 let fixture, home, server, base;
@@ -63,6 +63,9 @@ test('analyzeInventory: click depth via BFS, orphans, sitemap, sections, tree', 
   assert.equal(by['/a/x/y'].clickDepth, 3);
   assert.equal(by['/orphan'].clickDepth, null);
   assert.equal(by['/a'].inlinks, 1);
+  // who links to a page: the pages with a link to it, and the page that redirects to it
+  assert.deepEqual(by['/a'].linkedFrom, ['/']);
+  assert.equal(by['/orphan'].linkedFrom.length, 0);
   assert.equal(summary.htmlPages, 6);
   assert.equal(summary.clickDepth.max, 3);
   assert.deepEqual(summary.clickDepth.histogram, { 0: 1, 1: 2, 2: 1, 3: 1 });
@@ -74,6 +77,40 @@ test('analyzeInventory: click depth via BFS, orphans, sitemap, sections, tree', 
   assert.equal(summary.sections.find((s) => s.section === '/a').pages, 3);
   assert.equal(tree.total, 6);
   assert.equal(tree.children.find((c) => c.name === 'a').children[0].path, '/a/x');
+});
+
+test('analyzeInventory: a 404 knows who links to it (linkedFrom), redirect sources included, capped', () => {
+  const many = Array.from({ length: 30 }, (_, i) => pg(`/p${String(i).padStart(2, '0')}`, ['/gone', '/ok']));
+  const pages = [
+    pg('/', ['/old', '/gone', '/p00']),
+    ...many,
+    pg('/gone', [], { status: 404, isHtml: false }),
+    pg('/ok'),
+    { ...pg('/old'), status: 301, redirects: [{ status: 301, location: '/new' }], finalUrl: 'http://h/new', finalStatus: 200, isHtml: false },
+    pg('/new', [], { foundFrom: '/old' }),
+  ];
+  const { pages: recs } = analyzeInventory(pages, { start: ['/'], sitemap: [] });
+  const by = Object.fromEntries(recs.map((r) => [r.key, r]));
+  assert.equal(by['/gone'].inlinks, 31);
+  assert.equal(by['/gone'].linkedFrom.length, 31, 'broken pages keep many referrers');
+  assert.deepEqual(by['/gone'].linkedFrom.slice(0, 3), ['/', '/p00', '/p01']);
+  assert.equal(by['/ok'].inlinks, 30);
+  assert.equal(by['/ok'].linkedFrom.length, 20, 'healthy pages keep the first 20, inlinks is the full count');
+  assert.deepEqual(by['/new'].linkedFrom, ['/old']);
+  assert.match(inventoryCsv({ pages: recs }).split('\n').find((l) => l.startsWith('/new,')), /\/old/);
+});
+
+test('analyzeInventory: a page of a sibling host knows which pages of the site link to it', () => {
+  const pages = [
+    pg('/', ['/a', 'help.test/hc/it']),
+    pg('/a', ['help.test/hc/it']),
+    { ...pg('help.test/hc/it', [], { status: 403, isHtml: false }), boundary: true, pathKey: '/hc/it', host: 'help.test' },
+  ];
+  const { pages: recs } = analyzeInventory(pages, { start: ['/'], sitemap: [] });
+  const b = recs.find((r) => r.boundary);
+  assert.equal(b.key, '/hc/it');
+  assert.equal(b.inlinks, 2);
+  assert.deepEqual(b.linkedFrom, ['/', '/a']);
 });
 
 test('web app: static files, Host and Origin protection', async () => {

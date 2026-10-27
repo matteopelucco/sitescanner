@@ -76,6 +76,15 @@ function mapFields(p) {
   return Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined));
 }
 
+// Who links to a page, so a 404 can be traced back to the pages to fix. `inlinks` is the full count; the list is
+// capped (more for broken pages, which are the reason to look) to keep the inventory small.
+const REFERRERS_MAX = 20;
+const REFERRERS_BROKEN_MAX = 200;
+function referrers(set, p) {
+  const broken = !!p.error || p.status >= 400;
+  return [...set].sort().slice(0, broken ? REFERRERS_BROKEN_MAX : REFERRERS_MAX);
+}
+
 const segments = (key) => key.split('?')[0].split('/').filter(Boolean);
 
 function histogram(values) {
@@ -101,17 +110,23 @@ export function analyzeInventory(allPages, seeds = { start: [], sitemap: [] }, d
   const byKey = new Map(pages.map((p) => [p.key, p]));
   const out = new Map(pages.map((p) => [p.key, new Set()]));
   const inlinks = new Map(pages.map((p) => [p.key, new Set()]));
+  // the pages of a sibling host are named by id (host + key) in the links of the site
+  const boundaryIn = new Map(boundaryPages.map((p) => [p.key, new Set()]));
   for (const p of pages) {
     for (const k of (p.links && p.links.internal) || []) {
       if (k === p.key) continue;
       out.get(p.key).add(k);
       if (inlinks.has(k)) inlinks.get(k).add(p.key);
+      else if (boundaryIn.has(k)) boundaryIn.get(k).add(p.key);
     }
   }
   // A redirecting page has no links: its edge is the redirect target, queued with foundFrom = source.
   for (const p of pages) {
     const src = p.foundFrom && byKey.get(p.foundFrom);
-    if (src && src.redirects.length && !src.offsite) out.get(src.key).add(p.key);
+    if (src && src.redirects.length && !src.offsite) {
+      out.get(src.key).add(p.key);
+      inlinks.get(p.key).add(src.key);
+    }
   }
 
   const clickDepth = new Map();
@@ -147,6 +162,7 @@ export function analyzeInventory(allPages, seeds = { start: [], sitemap: [] }, d
       urlDepth: segs.length,
       section: segs.length ? `/${segs[0]}` : '/',
       inlinks: inlinks.get(p.key).size,
+      linkedFrom: referrers(inlinks.get(p.key), p),
       outlinks: out.get(p.key).size,
       inSitemap: inSitemap.has(p.key),
       ...mapFields(p),
@@ -170,7 +186,8 @@ export function analyzeInventory(allPages, seeds = { start: [], sitemap: [] }, d
       clickDepth: null,
       urlDepth: segs.length,
       section: segs.length ? `/${segs[0]}` : '/',
-      inlinks: 0,
+      inlinks: boundaryIn.get(p.key).size,
+      linkedFrom: referrers(boundaryIn.get(p.key), p),
       outlinks: 0,
       inSitemap: false,
       ...mapFields(p),
@@ -431,6 +448,6 @@ const csvCell = (v) => {
 };
 
 export function inventoryCsv(inv) {
-  const cols = ['key', 'status', 'redirectTo', 'error', 'contentType', 'html', 'title', 'bytes', 'responseMs', 'clickDepth', 'urlDepth', 'section', 'inlinks', 'outlinks', 'inSitemap'];
-  return [cols.join(','), ...inv.pages.map((p) => cols.map((c) => csvCell(p[c])).join(','))].join('\n') + '\n';
+  const cols = ['key', 'status', 'redirectTo', 'error', 'contentType', 'html', 'title', 'bytes', 'responseMs', 'clickDepth', 'urlDepth', 'section', 'inlinks', 'linkedFrom', 'outlinks', 'inSitemap'];
+  return [cols.join(','), ...inv.pages.map((p) => cols.map((c) => csvCell(c === 'linkedFrom' ? (p.linkedFrom || []).join(' | ') : p[c])).join(','))].join('\n') + '\n';
 }

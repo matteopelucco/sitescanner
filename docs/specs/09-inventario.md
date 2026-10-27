@@ -15,13 +15,14 @@ Un inventario misura dimensione, struttura e profondità di un sito. Usa il craw
 
 | ID | Requisito |
 |---|---|
-| RF-INV-10 | Per ogni URL visitato: chiave, status (ed eventuale destinazione del redirect o errore), content type, se è una pagina HTML valida (2xx, HTML, senza redirect), title, peso, tempo di risposta, profondità di click, profondità URL, sezione, link entranti e uscenti, presenza nella sitemap. |
+| RF-INV-10 | Per ogni URL visitato: chiave, status (ed eventuale destinazione del redirect o errore), content type, se è una pagina HTML valida (2xx, HTML, senza redirect), title, peso, tempo di risposta, profondità di click, profondità URL, sezione, link entranti e uscenti, chi linka la pagina (RF-INV-17), presenza nella sitemap. |
 | RF-INV-11 | **Profondità di click**: distanza minima, in link interni, dalle pagine di `start`. I redirect contano come un link verso la destinazione. Una pagina raggiunta solo tramite la sitemap (o non raggiungibile con i link) non ha profondità ed è **non collegata**. *(test/web.test.js)* |
 | RF-INV-12 | **Profondità URL**: numero di segmenti del path (`/a/b/c` = 3; la query non conta). **Sezione**: primo segmento del path (`/` per la home). |
 | RF-INV-13 | Riepilogo: URL visitati, pagine HTML, conteggio per classe di status (2xx, 3xx, 4xx, 5xx, errori di rete), content type, peso HTML totale, tempo di risposta medio; profondità di click massima, media e istogramma; profondità URL massima e istogramma; pagine non collegate. |
 | RF-INV-14 | Per sezione: pagine, pagine collegate, profondità di click media e massima, profondità URL massima. |
 | RF-INV-15 | Sitemap: URL elencati, quanti visitati, pagine solo in sitemap (non collegate), pagine collegate assenti dalla sitemap. Più il numero di link interni verso URL non visitati (esclusi o oltre i limiti). |
 | RF-INV-16 | Albero dei path delle pagine HTML, con il numero di pagine per ramo. Le 20 pagine con più link entranti e le 20 più profonde. |
+| RF-INV-17 | **Da dove arriva una pagina**: ogni URL riporta `linkedFrom`, l'elenco ordinato delle pagine che lo linkano (link interni; una pagina raggiunta con un redirect è linkata dalla pagina che reindirizza). `inlinks` resta il conteggio completo; l'elenco è limitato a 20 chiavi, a 200 per le pagine che non si caricano (errore di rete, 4xx, 5xx), che sono il motivo per cui lo si consulta. Una pagina trovata solo da sitemap o URL di partenza ha l'elenco vuoto. L'export CSV ha la colonna `linkedFrom` (chiavi separate da ` \| `). Nella web app le pagine che non si caricano mostrano subito le prime tre pagine che le linkano; il numero di link entranti apre l'elenco di ogni pagina. Le pagine di un host fratello ([§14.2.2](14-mappa-del-sito.md)) portano l'etichetta «host fratello» con il dominio, il link della riga punta al loro host e c'è il filtro «Host fratelli». *(test/web.test.js)* |
 
 ## 9.3 Dati e visualizzazione
 

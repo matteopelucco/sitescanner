@@ -324,3 +324,56 @@ test('pdf export: a real PDF with the diagram, when Chromium can print', async (
   assert.ok(buf.length > 10000);
   assert.match(res.headers.get('content-disposition'), /\.pdf"/);
 });
+
+test('inventory table: a 404 shows who links to it, and the count opens the list of any page (RF-INV-17)', async (t) => {
+  if (skip) return t.skip(skip);
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x').pathname;
+    const html = (b) => res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(b);
+    if (u === '/') return html(page('Home', '<a href="/a">a</a> <a href="/b">b</a> <a href="/rotta">rotta</a>'));
+    if (u === '/a' || u === '/b') return html(page(u.slice(1), '<a href="/rotta">rotta</a>'));
+    res.writeHead(404).end();
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const id = (await runInventory({ url: `http://127.0.0.1:${srv.address().port}/` })).id;
+    const { page: p, context: ctx, problems } = await openPage(browser, app.base, { viewport: { width: 1200, height: 900 } });
+    await p.goto(`${app.base}/#/inventory/${id}`);
+    const row = p.locator('#pagesBox tbody tr', { hasText: '/rotta' });
+    await row.waitFor();
+    const text = await row.innerText();
+    assert.match(text, /Linkata da:/, 'a page that does not load shows its referrers at once');
+    for (const k of ['/', '/a', '/b']) assert.ok(text.includes(k), `lists ${k}`);
+    // a healthy page lists them on demand
+    const ok = p.locator('#pagesBox tbody tr', { hasText: 'Servizi' }).or(p.locator('#pagesBox tbody tr').filter({ has: p.locator('a[href$="/a"]') }).first());
+    assert.doesNotMatch(await ok.first().innerText(), /Linkata da:/);
+    await ok.first().locator('[data-refs]').click();
+    assert.match(await p.locator('#pagesBox tbody tr').filter({ has: p.locator('a[href$="/a"]') }).first().innerText(), /Linkata da:\s*\//);
+    assert.deepEqual(problems, []);
+    await ctx.close();
+  } finally {
+    srv.closeAllConnections();
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+test('inventory table: a page of a sibling host says so, links to its own host, and has a filter', async (t) => {
+  if (skip) return t.skip(skip);
+  const { storageFor } = await import('../src/storage/index.js');
+  const inv = bigInventory('sib', 1, 1);
+  inv.pages.push({ key: '/hc/it', boundary: true, host: 'support.x.test', status: 403, html: false, inlinks: 1, linkedFrom: ['/'], outlinks: 0, urlDepth: 2, section: '/hc', clickDepth: null, inSitemap: false });
+  await storageFor().saveInventory(inv, inv);
+  const { page: p, context: ctx, problems } = await openPage(browser, app.base, { viewport: { width: 1200, height: 900 } });
+  await p.goto(`${app.base}/#/inventory/sib`);
+  await p.waitForSelector('#pagesBox tbody tr');
+  await p.selectOption('#pf', 'siblings');
+  await p.waitForFunction(() => document.querySelectorAll('#pagesBox tbody tr').length === 1);
+  const row = p.locator('#pagesBox tbody tr');
+  const text = await row.innerText();
+  assert.match(text, /host fratello/);
+  assert.match(text, /support\.x\.test/);
+  assert.match(text, /Linkata da:/);
+  assert.equal(await row.locator('td.key a').first().getAttribute('href'), 'https://support.x.test/hc/it', 'the link goes to its own host');
+  assert.deepEqual(problems, []);
+  await ctx.close();
+});

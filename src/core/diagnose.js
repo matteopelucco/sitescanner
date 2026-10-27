@@ -141,6 +141,12 @@ export function diagnoseScan(scan) {
   for (const p of pages) {
     for (const k of new Set(p.links?.internal || [])) if (k !== p.key) (inlinks[k] = inlinks[k] || []).push(p.key);
   }
+  // A redirecting page has no links: the page it leads to was found from it.
+  const byKey = new Map(pages.map((p) => [p.key, p]));
+  for (const p of pages) {
+    const src = p.foundFrom && byKey.get(p.foundFrom);
+    if (src && src.redirects?.length && !(inlinks[p.key] || []).includes(src.key)) (inlinks[p.key] = inlinks[p.key] || []).push(src.key);
+  }
 
   const byStatus = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0, fail: 0 };
   const sev = { error: 0, warn: 0, info: 0 };
