@@ -1,4 +1,5 @@
 import { comparisonsFor, COMPARISON_LABELS, NEEDS_TARGET } from '/app/assertions.js';
+import { mountMapStats, mountMapViews } from '/app/mapview.js';
 
 // Web app: sites, scans with live progress, inventories. Talks to /api (src/api.js); job updates via SSE.
 
@@ -54,7 +55,7 @@ const runningJobs = () => state.jobs.filter((j) => j.status === 'running');
 const siteJobs = (site) => state.jobs.filter((j) => j.lock === `site:${site}` || (j.params && j.params.site === site));
 
 // ---- jobs ----
-const PHASE = { start: 'Avvio', robots: 'robots.txt', sitemap: 'Sitemap', crawl: 'Crawling', screenshots: 'Screenshot', saving: 'Salvataggio', report: 'Aggiornamento report' };
+const PHASE = { start: 'Avvio', robots: 'robots.txt', sitemap: 'Sitemap', crawl: 'Crawling', render: 'Rendering SPA', documents: 'Controllo documenti', screenshots: 'Screenshot', saving: 'Salvataggio', report: 'Aggiornamento report' };
 const STATUS = { running: ['In corso', 'info'], done: ['Completato', 'ok'], failed: ['Fallito', 'error'], cancelled: ['Annullato', 'warn'] };
 
 function progressBar(j) {
@@ -82,7 +83,7 @@ function progressLine(j) {
   }
   const parts = [PHASE[p.phase] || p.phase];
   if (p.phase === 'crawl') parts.push(`${fmtNum(p.done)} visitati su ${fmtNum(p.discovered)} scoperti (limite ${fmtNum(p.limit)})`);
-  if (p.phase === 'screenshots') parts.push(`${fmtNum(p.done)} / ${fmtNum(p.limit)}`);
+  if (p.phase === 'screenshots' || p.phase === 'render') parts.push(`${fmtNum(p.done)} / ${fmtNum(p.limit)}`);
   if (j.cancelling) parts.push('annullamento…');
   return esc(parts.join(' · ')) + (p.current ? ` <span class="mono">${esc(p.current)}</span>` : '');
 }
@@ -464,6 +465,20 @@ function siteForm(c, defs, isNew) {
     <fieldset class="fs"><legend>Confronto</legend><div class="fields">
       ${area('ignore', 'Tipi di differenza da ignorare', c.compare?.ignore, 'es. <code>content-changed</code>, <code>perf-regression</code>. Le soglie si modificano nel YAML.', 'cmp.ignore')}
     </div></fieldset>
+    <fieldset class="fs"><legend>Mappa del sito</legend><div class="fields">
+      ${area('docTypes', 'Tipi di documento da elencare', c.map?.documentTypes ?? defs.map?.documentTypes, 'Estensioni, una per riga: <code>pdf</code>, <code>docx</code>, <code>xlsx</code>, <code>zip</code>… I documenti si elencano, non si visitano come pagine.', 'map.documentTypes')}
+      ${area('navSel', 'Selettori CSS dei menu', c.map?.navSelectors, 'Oltre a <code>header</code>, <code>nav</code>, <code>footer</code>, <code>aside</code> e ai ruoli ARIA: le aree che contano come navigazione, es. <code>.mega-menu</code>.', 'map.navSelectors')}
+      ${num('maxDocuments', 'Documenti controllati al massimo', c.map?.maxDocuments, defs.map?.maxDocuments, 'map.maxDocuments')}
+      <label class="f"><span>Soglia del modello</span><input type="number" min="0.05" max="1" step="0.05" name="map.templateRatio" value="${c.map?.templateRatio ?? ''}" placeholder="${esc(defs.map?.templateRatio)}"><small>Quota di pagine oltre la quale un link è del menu quando la pagina non ha <code>nav</code>.</small></label>
+    </div>
+    <div class="fields" style="margin-top:10px">
+      ${area('sibHosts', 'Host fratelli: solo questi', c.map?.siblingHosts, 'Vuoto = tutti i sottodomini del sito. Una pagina di confine per ogni link, i suoi link non si seguono.', 'map.siblingHosts')}
+      ${area('sibExcl', 'Host fratelli da escludere', c.map?.siblingExclude, 'es. una CDN o un dominio di servizio.', 'map.siblingExclude')}
+      ${num('maxSibling', 'Pagine di confine al massimo', c.map?.maxSiblingPages, defs.map?.maxSiblingPages, 'map.maxSiblingPages')}
+      ${num('maxRendered', 'Pagine renderizzate al massimo', c.map?.maxRendered, defs.map?.maxRendered, 'map.maxRendered')}
+    </div>
+    <div class="row" style="margin-top:10px;gap:16px">${chk('checkDocuments', 'controlla i documenti (richiesta HEAD: stato, tipo e peso)', c.map?.checkDocuments, 'map.checkDocuments')}${chk('siblings', 'visita le pagine di confine degli host fratelli', c.map?.siblings ?? true, 'map.siblings')}${chk('renderSpa', 'apri col browser le pagine che si generano nel browser (SPA)', (c.map?.render ?? 'auto') === 'auto', 'map.render')}</div>
+    </fieldset>
     <fieldset class="fs"><legend>Issue di qualità</legend><div class="fields">
       ${area('qdisable', 'Issue da non calcolare', c.quality?.disable, 'Codici, uno per riga, es. <code>anchor-generic</code>, <code>url-underscore</code>. Severità e soglie si modificano nel YAML (<code>quality</code>).', 'q.disable')}
     </div></fieldset>
@@ -491,6 +506,14 @@ function collectForm(f) {
     },
     compare: { ignore: lines(v('cmp.ignore').value) },
     quality: { disable: lines(v('q.disable').value) },
+    map: {
+      documentTypes: lines(v('map.documentTypes').value).map((x) => x.toLowerCase()), navSelectors: lines(v('map.navSelectors').value),
+      maxDocuments: intOrNull(val('map.maxDocuments')), templateRatio: val('map.templateRatio') === '' ? null : Number(val('map.templateRatio')),
+      checkDocuments: v('map.checkDocuments').checked,
+      siblings: v('map.siblings').checked, render: v('map.render').checked ? 'auto' : 'never',
+      siblingHosts: lines(v('map.siblingHosts').value), siblingExclude: lines(v('map.siblingExclude').value),
+      maxSiblingPages: intOrNull(val('map.maxSiblingPages')), maxRendered: intOrNull(val('map.maxRendered')),
+    },
     envs: {},
   };
   for (const row of $$('.env', f)) {
@@ -614,6 +637,7 @@ async function viewInventories(params) {
         <label class="f"><span>Max URL</span><input type="number" min="1" name="maxPages" placeholder="${esc(defs.maxPages)}"></label>
         <label class="f"><span>Max profondità</span><input type="number" min="1" name="maxDepth" placeholder="${esc(defs.maxDepth)}"></label>
         <label class="f"><span>Richieste parallele</span><input type="number" min="1" name="concurrency" placeholder="4"></label>
+        <label class="check" data-src="site"><input type="checkbox" name="importNotes"> importa le note dell'inventario precedente dello stesso sito</label>
       </div>
       <div class="row" style="margin-top:10px"><small class="muted">Con un sito configurato valgono le sue regole (include/exclude, robots, auth, sitemap); i limiti sono quelli indicati qui.</small>
         <button class="btn primary" type="submit" style="margin-left:auto">Avvia inventario</button></div>
@@ -635,7 +659,7 @@ async function viewInventories(params) {
     const v = Object.fromEntries(new FormData(f));
     const p = { type: 'inventory', maxPages: v.maxPages || undefined, maxDepth: v.maxDepth || undefined, concurrency: v.concurrency || undefined };
     if (v.src === 'url') p.url = v.url.trim();
-    else Object.assign(p, { site: v.site, env: v.env });
+    else Object.assign(p, { site: v.site, env: v.env, importNotes: v.importNotes ? true : undefined });
     try { await startJob(p); } catch (err) { toast(err.message, true); }
   };
   renderJobBoxes();
@@ -765,6 +789,16 @@ function drawPages() {
   if (more) more.onclick = () => { state.invPages.limit += 500; drawPages(); };
 }
 
+// the exports of the map (RF-MAP-175): files served by the API
+function exportLinks(id) {
+  const f = [['csv', 'CSV (Excel)'], ['json', 'JSON'], ['md', 'Markdown'], ['zip', 'Bundle offline'], ['pdf', 'PDF']];
+  return `<span class="row" aria-label="Esporta la mappa"><span class="muted small">Esporta la mappa</span>${f.map(([e, l]) => `<a class="btn small" href="/api/inventories/${encodeURIComponent(id)}/map.${e}" download>${l}</a>`).join('')}</span>`;
+}
+
+function mapTabs(id, tab) {
+  return `<nav class="tabs" aria-label="Viste dell'inventario">${MAP_TABS.map(([k, l]) => `<a class="tab${k === tab ? ' on' : ''}" href="#/inventory/${encodeURIComponent(id)}?tab=${k}" ${k === tab ? 'aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
+}
+
 function drawTree() {
   const t = $('#treeBox');
   t.innerHTML = treeList([state.inv.tree], true);
@@ -776,9 +810,23 @@ function drawTree() {
   };
 }
 
-async function viewInventory(id) {
+const configuredSites = () => ((state.info && state.info.sites) || []).filter((x) => x.configured).map((x) => x.id);
+const MAP_TABS = [['overview', 'Panoramica'], ['graph', 'Grafo'], ['tree', 'Albero'], ['catalog', 'Catalogo'], ['redirects', 'Redirect ed ecosistema']];
+
+async function viewInventory(id, params = new URLSearchParams()) {
   setView('inventory');
   const inv = state.inv = await api('GET', `inventories/${encodeURIComponent(id)}`);
+  const tab = MAP_TABS.some(([k]) => k === params.get('tab')) ? params.get('tab') : 'overview';
+  if (tab !== 'overview') {
+    app().innerHTML = `
+      <p><a href="#/inventory">← Inventari</a></p>
+      <div class="head"><div><h1 class="mono" style="font-size:18px">${esc(inv.baseUrl)}</h1>
+        <div class="sub">${esc(fmtDate(inv.startedAt))} · <span class="mono">${esc(inv.id)}</span></div></div></div>
+      <div class="row" style="margin-bottom:10px">${exportLinks(inv.id)}</div>
+      ${mapTabs(inv.id, tab)}<div id="mapRoot"><p class="muted">Caricamento della mappa…</p></div>`;
+    await mountMapViews({ root: $('#mapRoot'), id: inv.id, tab, params, api, esc, fmtNum, site: inv.site, sites: configuredSites() });
+    return;
+  }
   state.invPages = { q: '', filter: '', sort: 'clickDepth', dir: 1, limit: 200 };
   state.openTree = new Set(['/', ...inv.tree.children.slice(0, 1).map((c) => c.path)]);
   const s = inv.summary;
@@ -790,6 +838,8 @@ async function viewInventory(id) {
     <div class="head"><div><h1 class="mono" style="font-size:18px">${esc(inv.baseUrl)}</h1>
       <div class="sub">${esc(fmtDate(inv.startedAt))} · ${fmtDur(inv.durationMs)}${inv.site ? ` · sito ${esc(inv.site)} [${esc(inv.env)}]` : ''} · limiti ${fmtNum(inv.options.maxPages)} URL, profondità ${fmtNum(inv.options.maxDepth)} · <span class="mono">${esc(inv.id)}</span></div></div>
       <div class="row"><a class="btn" href="/api/inventories/${esc(inv.id)}.csv">Scarica CSV</a></div></div>
+    <div class="row" style="margin-bottom:10px">${exportLinks(inv.id)}</div>
+    ${mapTabs(inv.id, 'overview')}
     ${inv.crawl.truncated ? `<div class="notice warn">Inventario troncato al limite di ${fmtNum(inv.options.maxPages)} URL: ${fmtNum(inv.crawl.unvisited)} URL scoperti e non visitati. Dimensioni e profondità sono un minimo: rilancia con un limite più alto.</div>` : ''}
     <div class="stats">
       ${stat('Pagine HTML', fmtNum(s.htmlPages), `${fmtNum(s.urls)} URL visitati`)}
@@ -826,7 +876,9 @@ async function viewInventory(id) {
     <div class="panel"><h2>URL</h2>
       <div class="row" style="margin-bottom:10px"><input class="input" id="pq" placeholder="Filtra per URL o titolo" style="max-width:320px">
         <select class="input" id="pf" style="max-width:260px">${Object.entries(PAGE_FILTERS).map(([k, [l]]) => `<option value="${k}">${l}</option>`).join('')}</select></div>
-      <div id="pagesBox"></div></div>`;
+      <div id="pagesBox"></div></div>
+    <div id="mapStats"></div>`;
+  mountMapStats({ root: $('#mapStats'), id: inv.id, api, esc, fmtNum, sites: configuredSites() });
   drawTree();
   drawPages();
   let t = null;
@@ -1697,9 +1749,12 @@ async function viewMonitoring() {
     dt.addEventListener('toggle', () => {
       if (!dt.open) return;
       for (const other of $$('details.menu[open]')) if (other !== dt) other.open = false;
+      dt.dataset.scrollY = window.scrollY;
       const r = dt.querySelector('summary').getBoundingClientRect(), pop = dt.querySelector('.menupop');
       pop.style.left = `${Math.max(8, r.right - 190)}px`;
-      pop.style.top = `${r.bottom + 190 > window.innerHeight ? Math.max(8, r.top - pop.offsetHeight) : r.bottom}px`;
+      // the real height of the menu (it grows with its items): a menu that does not fit below opens above
+      const h = pop.offsetHeight;
+      pop.style.top = `${r.bottom + h > window.innerHeight ? Math.max(8, r.top - h) : r.bottom}px`;
     });
   }
 
@@ -2638,7 +2693,7 @@ async function route() {
       await viewSite(parts[1], parts[2] || 'scans');
     } else if (parts[0] === 'jobs' && parts[1]) await viewJob(parts[1]);
     else if (parts[0] === 'jobs') viewJobs();
-    else if (parts[0] === 'inventory' && parts[1]) await viewInventory(parts[1]);
+    else if (parts[0] === 'inventory' && parts[1]) await viewInventory(parts[1], params);
     else if (parts[0] === 'inventory') await viewInventories(params);
     else if (parts[0] === 'profile' && multi()) await viewProfile();
     else if (parts[0] === 'workspaces' && multi()) await viewWorkspaces();
@@ -2678,7 +2733,8 @@ async function boot() {
   $('[data-nav="monitoring"]').hidden = !monitoringOn();
   // the row menus of the lists close when one clicks elsewhere or scrolls
   document.addEventListener('click', (e) => { if (!e.target.closest('details.menu')) for (const o of $$('details.menu[open]')) o.open = false; });
-  window.addEventListener('scroll', () => { for (const o of $$('details.menu[open]')) o.open = false; }, { passive: true });
+  // the popup of a row menu is fixed on the screen: it closes when the page has scrolled away from its row, not at the few pixels the browser itself scrolls to bring a button into view
+  window.addEventListener('scroll', () => { for (const o of $$('details.menu[open]')) if (Math.abs(window.scrollY - Number(o.dataset.scrollY || 0)) > 40) o.open = false; }, { passive: true });
   window.addEventListener('hashchange', route);
   connectEvents();
   route();
