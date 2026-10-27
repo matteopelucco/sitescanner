@@ -12,6 +12,7 @@ import { serve, multiUserMode } from './server.js';
 import { runInventory } from './inventory.js';
 import { TOOL } from './version.js';
 
+
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 const red = c('31'), yellow = c('33'), blue = c('34'), green = c('32'), dim = c('2'), bold = c('1');
@@ -35,6 +36,10 @@ Uso:
                       | set <username> [--role admin|user] [--active true|false] | import <username> [--from <cartella>]
                       (account della modalità multi-utente, SITESCANNER_AUTH=1; password da SITESCANNER_PASSWORD o generata)
   sitescanner monitor run   un giro dei controlli di disponibilità (sviluppo: SITESCANNER_MONITOR_DEV=1)
+  sitescanner monitor apply [file] [--dry-run] [--url <app>] [--token <t>]   allinea lo spazio di lavoro al file dei monitor
+  sitescanner monitor test  [file] --base-url <anteprima> [--tag x] [--url <app>] [--token <t>]   prova i monitor del file su un'anteprima (exit 1 se falliscono)
+  sitescanner monitor export [--out file] [--url <app>] [--token <t>]   il file dei monitor esistenti
+                            (--url e --token si leggono anche da SITESCANNER_URL e SITESCANNER_TOKEN; file: sitescanner.monitors.yml)
   sitescanner monitor telegram-webhook [<url pubblico>]   registra il webhook del bot Telegram
 
 Riferimenti a una scan (--scan, --base, --head): id completo, prefisso univoco, label, "latest", "latest~N".
@@ -63,7 +68,7 @@ const SPECS = {
     'fail-on': { type: 'string' }, json: { type: 'string' }, visual: { type: 'boolean' }, limit: { type: 'string' },
   },
   user: { admin: { type: 'boolean' }, name: { type: 'string' }, role: { type: 'string' }, active: { type: 'string' }, from: { type: 'string' } },
-  monitor: {},
+  monitor: { url: { type: 'string' }, token: { type: 'string' }, interval: { type: 'string' }, once: { type: 'boolean' }, concurrency: { type: 'string' }, 'dry-run': { type: 'boolean' }, 'base-url': { type: 'string' }, tag: { type: 'string', multiple: true }, branch: { type: 'string' }, commit: { type: 'string' }, out: { type: 'string' } },
 };
 const POSITIONALS = new Set(['user', 'monitor']);
 
@@ -374,7 +379,95 @@ async function cmdCompare(o) {
   return failed ? 1 : 0;
 }
 
+/** `monitor apply|test|export`: they talk to the service with the token of a workspace (spec §13.13). */
+async function cmdMonitorCode(o, positionals) {
+  const [sub, fileArg] = positionals;
+  const base = String(o.url || process.env.SITESCANNER_URL || '').replace(/\/$/, '');
+  const token = o.token || process.env.SITESCANNER_TOKEN;
+  if (!base) throw new UserError("Manca l'indirizzo del servizio: --url https://… oppure SITESCANNER_URL");
+  if (!token) throw new UserError('Manca il token API: --token sst_… oppure SITESCANNER_TOKEN (si crea nella pagina «Spazi di lavoro»)');
+  const call = async (method, p, body) => {
+    let res;
+    try {
+      res = await fetch(`${base}/api/v1/${p}`, { method, headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(300000) });
+    } catch (e) {
+      throw new UserError(`Il servizio ${base} non risponde: ${(e.cause && e.cause.code) || e.message}`);
+    }
+    const text = await res.text();
+    let data = text;
+    try { data = JSON.parse(text); } catch { /* yaml */ }
+    if (!res.ok) {
+      if (data && data.errors) {
+        for (const e of data.errors) console.error(red(e.text));
+        throw new UserError(data.error);
+      }
+      throw new UserError(`${(data && data.error) || `HTTP ${res.status}`}`);
+    }
+    return data;
+  };
+  const read = (file) => {
+    const f = file || 'sitescanner.monitors.yml';
+    if (!fs.existsSync(f)) throw new UserError(`File non trovato: ${f}`);
+    return { name: path.basename(f), file: fs.readFileSync(f, 'utf8') };
+  };
+  if (sub === 'export') {
+    const yaml = await call('GET', 'export');
+    if (o.out) { fs.writeFileSync(o.out, yaml); console.log(`Scritto ${o.out}`); } else process.stdout.write(yaml);
+    return 0;
+  }
+  if (sub === 'apply') {
+    const f = read(fileArg);
+    const r = await call('POST', 'apply', { ...f, dryRun: !!o['dry-run'] });
+    const p = r.plan;
+    const w = p.windows;
+    for (const x of p.create) console.log(`${green('+')} ${x.id}  ${dim(`crea «${x.name}» (${x.type})`)}`);
+    for (const x of p.update) console.log(`${yellow('~')} ${x.id}  ${dim(`modifica: ${x.changes.map((c) => `${c.field} ${JSON.stringify(c.from)} → ${JSON.stringify(c.to)}`).join(', ')}`)}`);
+    for (const x of p.delete) console.log(`${red('-')} ${x.id}  ${dim(`elimina «${x.name}»`)}`);
+    for (const x of w.create) console.log(`${green('+')} manutenzione ${x.id}`);
+    for (const x of w.update) console.log(`${yellow('~')} manutenzione ${x.id}  ${dim(x.changes.map((c) => c.field).join(', '))}`);
+    for (const x of w.delete) console.log(`${red('-')} manutenzione ${x.id}`);
+    const changed = p.create.length + p.update.length + p.delete.length + w.create.length + w.update.length + w.delete.length;
+    console.log(`${r.applied ? 'Applicato' : 'Piano (nessuna modifica fatta)'}: ${p.create.length} da creare, ${p.update.length} da modificare, ${p.delete.length} da eliminare, ${p.unchanged} invariati${changed ? '' : ' — niente da fare'}`);
+    return 0;
+  }
+  if (sub === 'test') {
+    if (!o['base-url']) throw new UserError("Serve l'indirizzo dell'anteprima: --base-url https://…");
+    const f = read(fileArg);
+    const r = await call('POST', 'test', { ...f, baseUrl: o['base-url'], tags: o.tag || [], branch: o.branch || process.env.GITHUB_REF_NAME || process.env.CI_COMMIT_REF_NAME || null, commit: o.commit || process.env.GITHUB_SHA || process.env.CI_COMMIT_SHA || null });
+    for (const x of r.results) {
+      const mark = x.outcome === 'ok' ? green('✔') : x.outcome === 'degraded' ? yellow('✔') : x.outcome === 'skipped' ? dim('–') : red('✖');
+      console.log(`${mark} ${x.name}  ${dim(x.url || '')}${x.ms != null ? dim(` ${x.ms} ms`) : ''}`);
+      if (x.message) console.log(`    ${x.outcome === 'error' ? red(x.message) : dim(x.message)}`);
+      for (const a of x.assertions || []) if (!a.ok) console.log(`    ${red('✖')} ${a.text} — ${a.message}`);
+    }
+    console.log(`${r.ok ? green('Tutto a posto') : red('Falliti')}: ${r.passed} riusciti, ${r.failed} falliti${r.skipped ? `, ${r.skipped} saltati` : ''} (${r.durationMs} ms)`);
+    return r.ok ? 0 : 1;
+  }
+  throw new UserError('Uso: sitescanner monitor run | apply | test | export | telegram-webhook');
+}
+
+/** `sitescanner monitor agent --url … --token ssa_…`: a private location in this network (RF-AGT-01, ADR-0025). */
+async function cmdMonitorAgent(o) {
+  const url = String(o.url || process.env.SITESCANNER_URL || '').replace(/\/$/, '');
+  const token = o.token || process.env.SITESCANNER_AGENT_TOKEN;
+  if (!url) throw new UserError("Manca l'indirizzo del servizio: --url https://… oppure SITESCANNER_URL");
+  if (!token) throw new UserError("Manca il token dell'agente: --token ssa_… oppure SITESCANNER_AGENT_TOKEN (si crea nella pagina «Agenti»)");
+  const { runAgent, AgentAuthError } = await import('./monitor/agent-client.js');
+  const ac = new AbortController();
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => ac.abort());
+  const stamp = () => new Date().toTimeString().slice(0, 8);
+  console.log(dim(`Agente locale: chiedo i controlli a ${url} ogni ${positiveInt(o.interval, 'interval') ?? 30} s (Ctrl+C per fermarlo)`));
+  try {
+    await runAgent({ url, token, pollS: positiveInt(o.interval, 'interval') ?? 30, concurrency: positiveInt(o.concurrency, 'concurrency') ?? 4, once: !!o.once, signal: ac.signal, log: (line) => console.log(`${dim(stamp())} ${line}`) });
+  } catch (e) {
+    if (e instanceof AgentAuthError) throw new UserError(e.message);
+    throw e;
+  }
+  return 0;
+}
+
 async function cmdMonitor(o, positionals) {
+  if (['apply', 'test', 'export'].includes(positionals[0])) return cmdMonitorCode(o, positionals);
   if (positionals[0] === 'telegram-webhook') {
     // registers the webhook of the deploy's bot (spec §12.5): Telegram calls it with the secret token
     const { publicBaseUrl, telegramApi } = await import('./monitor/channels.js');
@@ -386,7 +479,8 @@ async function cmdMonitor(o, positionals) {
     console.log(`Webhook del bot impostato: ${url}`);
     return 0;
   }
-  if (positionals[0] !== 'run') throw new UserError('Uso: sitescanner monitor run | telegram-webhook [<url pubblico>]');
+  if (positionals[0] === 'agent') return cmdMonitorAgent(o);
+  if (positionals[0] !== 'run') throw new UserError('Uso: sitescanner monitor run | apply | test | export | agent | telegram-webhook [<url pubblico>]');
   const { runRound, monitoringEnabled } = await import('./monitor/engine.js');
   if (!monitoringEnabled()) throw new UserError('Il monitoraggio gira su Vercel; in locale, solo per sviluppo, con SITESCANNER_MONITOR_DEV=1');
   const { initStorage } = await import('./storage/index.js');

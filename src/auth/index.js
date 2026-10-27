@@ -21,6 +21,7 @@ const BAD_LOGIN = 'Username o password non validi';
 /** RF-USR-01. Returns an error message or null. */
 export function usernameProblem(username) {
   const u = String(username ?? '');
+  if (/^ws_/.test(u)) return 'Username riservato: «ws_» è il prefisso degli spazi di lavoro condivisi';
   if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(u)) return 'Username non valido: 3–32 caratteri tra a-z, 0-9, ".", "_", "-", che iniziano con una lettera o una cifra';
   return null;
 }

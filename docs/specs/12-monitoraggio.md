@@ -46,10 +46,10 @@ Un **monitor** controlla un URL. Appartiene a un utente ([§10.4](10-utenti-e-ac
 | Timeout | 30 s | 5–60 s |
 | Metodo | `GET` | `GET` o `HEAD` |
 | Redirect | seguiti, max 10 | Si valuta la risposta finale |
-| Status attesi | `200-399` | Elenco o intervalli (es. `200,301`, `200-299`) |
+| Status attesi | `200-399` | Elenco o intervalli (es. `200,301`, `200-299`); dalla v2 è un'asserzione sullo status ([§13.3](13-monitoraggio-v2.md#133-asserzioni-e-check-di-api)), come la keyword |
 | Keyword | nessuna | Testo che DEVE comparire, oppure NON DEVE comparire, nel corpo; maiuscole/minuscole ignorate se scelto. Si cerca nei primi 2 MB |
 | Header e basic auth | nessuno | Come in [§2](02-configurazione.md); in multi-utente senza `${VAR}` ([RF-SEC-02](10-utenti-e-accesso.md#106-sicurezza-in-modalità-multi-utente)) |
-| Soglia di lentezza | nessuna | Tempo di risposta in ms oltre il quale il controllo è «lento» |
+| Soglia di degrado e di guasto | 3000 ms e il timeout | Tempo di risposta in ms oltre il quale il controllo è «degradato», e oltre il quale è un guasto ([§13.2](13-monitoraggio-v2.md#132-esiti-soglie-e-azioni-sui-monitor)); sostituisce la «soglia di lentezza» |
 | Certificato SSL | avvisi a 30, 14, 7, 1 giorni | Solo URL `https`; giorni configurabili o disattivabili |
 | Ritardo di notifica | 0 min | Avvisa del down solo se dura più di N minuti ([RF-NOT-05](#125-notifiche)) |
 | Promemoria | disattivato | Ripete l'avviso ogni N minuti mentre il sito è giù |
@@ -87,7 +87,7 @@ Un **monitor** controlla un URL. Appartiene a un utente ([§10.4](10-utenti-e-ac
 |---|---|
 | **in attesa** | Nessun controllo ancora eseguito |
 | **su** | Ultimo controllo ok |
-| **lento** | Su, ma con tempo di risposta oltre soglia negli ultimi 3 controlli |
+| **degradato** | Su, ma l'ultimo controllo ha superato la soglia di degrado ([§13.2](13-monitoraggio-v2.md#132-esiti-soglie-e-azioni-sui-monitor); nella prima versione «lento», dopo 3 controlli lenti) |
 | **giù** | Incidente aperto |
 | **in pausa** | Controlli sospesi dall'utente |
 | **in manutenzione** | Dentro una finestra di manutenzione ([§12.5 bis](#125-bis-finestre-di-manutenzione)): controlli registrati, nessun incidente né avviso |
@@ -98,7 +98,7 @@ Un **monitor** controlla un URL. Appartiene a un utente ([§10.4](10-utenti-e-ac
 | RF-INC-02 | Durante l'incidente si registrano i cambi di causa (es. da `timeout` a `http 502`), senza aprire nuovi incidenti. *(test/monitor.test.js)* |
 | RF-INC-03 | Ogni incidente ha una pagina con monitor, inizio, fine, durata, cronologia dei controlli, cause, avvisi inviati (canale, esito della consegna) e una nota libera dell'utente. *(test/monitor-api.test.js)* |
 | RF-INC-04 | Mettere in pausa un monitor giù chiude l'incidente con la causa «messo in pausa». Il tempo in pausa non conta per i KPI. *(test/monitor-api.test.js)* |
-| RF-INC-05 | Lo stato **lento** non apre incidenti. Notifica solo se l'utente lo chiede per quel monitor. |
+| RF-INC-05 | Lo stato **degradato** (ex «lento») non apre incidenti. Notifica solo se l'utente lo chiede per quel monitor. *(sostituito da RF-RIS-02, test/monitor-states.test.js)* |
 
 ## 12.5 Notifiche
 

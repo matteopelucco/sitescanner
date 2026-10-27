@@ -144,6 +144,56 @@ export const MIGRATIONS = [
       CREATE TABLE mon_links (code_hash text PRIMARY KEY, area text NOT NULL, expires_at double precision NOT NULL);
     `,
   },
+  {
+    version: 5,
+    name: 'heartbeat: ricerca del monitor dal token segreto',
+    sql: `
+      CREATE INDEX mon_monitors_hb ON mon_monitors ((data->>'hbToken')) WHERE data->>'hbToken' IS NOT NULL;
+    `,
+  },
+  {
+    version: 6,
+    name: 'variabili e segreti dello spazio di lavoro, con il registro delle modifiche',
+    sql: `
+      CREATE TABLE mon_secrets (area text NOT NULL, name text NOT NULL, data jsonb NOT NULL, PRIMARY KEY (area, name));
+      CREATE TABLE mon_secret_log (area text NOT NULL, at double precision NOT NULL, data jsonb NOT NULL);
+      CREATE INDEX mon_secret_log_area ON mon_secret_log (area, at);
+    `,
+  },
+  {
+    version: 7,
+    name: 'spazi di lavoro condivisi, con i loro membri, e token API (ADR-0023)',
+    // Additive: the personal workspace of a user is their area, with the id of the account, so no row moves.
+    // Undoing it is dropping the two tables.
+    sql: `
+      CREATE TABLE workspaces (id text PRIMARY KEY, data jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+      CREATE TABLE api_tokens (id text PRIMARY KEY, workspace_id text NOT NULL, hash text NOT NULL UNIQUE, data jsonb NOT NULL);
+      CREATE INDEX api_tokens_workspace ON api_tokens (workspace_id);
+    `,
+  },
+  {
+    version: 8,
+    name: 'status page pubbliche, comunicazioni di incidente e link pubblici (dashboard TV, badge)',
+    // The slug and the custom domain are unique across the deployment: the public page is asked without a session.
+    sql: `
+      CREATE TABLE mon_status_pages (area text NOT NULL, id text NOT NULL, slug text NOT NULL UNIQUE, domain text, data jsonb NOT NULL, PRIMARY KEY (area, id));
+      CREATE UNIQUE INDEX mon_status_pages_domain ON mon_status_pages (lower(domain)) WHERE domain IS NOT NULL;
+      CREATE TABLE mon_status_updates (area text NOT NULL, id text NOT NULL, page_id text NOT NULL, at double precision NOT NULL, data jsonb NOT NULL, PRIMARY KEY (area, id));
+      CREATE INDEX mon_status_updates_page ON mon_status_updates (area, page_id, at);
+      CREATE TABLE mon_public_links (token text PRIMARY KEY, area text NOT NULL, kind text NOT NULL, data jsonb NOT NULL);
+      CREATE INDEX mon_public_links_area ON mon_public_links (area);
+    `,
+  },
+  {
+    version: 9,
+    name: 'agenti locali (località private) e la coda dei loro controlli (ADR-0025)',
+    // Additive. The hash of the token is unique across the deployment: the agent asks without a session.
+    sql: `
+      CREATE TABLE mon_agents (area text NOT NULL, id text NOT NULL, hash text NOT NULL UNIQUE, data jsonb NOT NULL, PRIMARY KEY (area, id));
+      CREATE TABLE mon_agent_jobs (id text PRIMARY KEY, area text NOT NULL, agent_id text NOT NULL, state text NOT NULL, created_at double precision NOT NULL, data jsonb NOT NULL);
+      CREATE INDEX mon_agent_jobs_agent ON mon_agent_jobs (agent_id, state, created_at);
+    `,
+  },
 ];
 
 // Any number would do, as long as it is fixed: it identifies the migration lock.

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 // Monitoring data on the filesystem (local development, RF-MON-18 / RF-MST-03). Same interface as
 // PgMonitorStore. An area is '' (working folder) or a username (users/<username>/):
@@ -61,7 +62,7 @@ export class FsMonitorStore {
 
   async listAreas() {
     const out = [];
-    const used = (a) => fs.existsSync(this.file(a, 'monitors.json')) || fs.existsSync(this.file(a, 'channels.json'));
+    const used = (a) => fs.existsSync(this.file(a, 'monitors.json')) || fs.existsSync(this.file(a, 'channels.json')) || fs.existsSync(this.file(a, 'agents.json'));
     if (used('')) out.push('');
     const users = path.join(this.root, 'users');
     if (fs.existsSync(users)) for (const u of fs.readdirSync(users).sort()) if (used(u)) out.push(u);
@@ -86,6 +87,16 @@ export class FsMonitorStore {
     this.put(area, 'monitors', this.list(area, 'monitors').filter((m) => m.id !== id));
     this.put(area, 'incidents', this.list(area, 'incidents').filter((i) => i.monitorId !== id));
     for (const sub of ['checks', 'hourly', 'daily']) fs.rmSync(path.join(this.dir(area), sub, `${safeId(id)}.${sub === 'checks' ? 'jsonl' : 'json'}`), { force: true });
+    fs.rmSync(this.runDir(area, id), { recursive: true, force: true });
+  }
+
+  /** The heartbeat monitor with this token (RF-TYP-01), in any area. */
+  async findHeartbeat(token) {
+    for (const area of await this.listAreas()) {
+      const monitor = this.list(area, 'monitors').find((m) => m.type === 'heartbeat' && m.hbToken === token);
+      if (monitor) return { area, monitor };
+    }
+    return null;
   }
 
   async dueMonitors(now, limit = 1000) {
@@ -124,7 +135,36 @@ export class FsMonitorStore {
     return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((c) => c.at >= from && c.at < to);
   }
 
+  // ---------------- run details (spec §13.4): one gzip JSON per run ----------------
+
+  runDir(area, monitorId) {
+    return path.join(this.dir(area), 'runs', safeId(monitorId));
+  }
+
+  async saveRunDetail(area, monitorId, runId, detail) {
+    const dir = this.runDir(area, monitorId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${safeId(runId)}.json.gz`), zlib.gzipSync(JSON.stringify(detail)));
+  }
+
+  async loadRunDetail(area, monitorId, runId) {
+    const f = path.join(this.runDir(area, monitorId), `${safeId(runId)}.json.gz`);
+    if (!fs.existsSync(f)) return null;
+    return JSON.parse(zlib.gunzipSync(fs.readFileSync(f)).toString('utf8'));
+  }
+
   async pruneChecks(before) {
+    for (const area of await this.listAreas()) {
+      // run ids start with the instant in base 36: the details older than the raw checks go with them
+      const runs = path.join(this.dir(area), 'runs');
+      if (fs.existsSync(runs)) {
+        for (const m of fs.readdirSync(runs)) {
+          for (const f of fs.readdirSync(path.join(runs, m))) {
+            if (parseInt(f.slice(0, f.length - '.json.gz'.length).slice(0, -6), 36) < before) fs.rmSync(path.join(runs, m, f), { force: true });
+          }
+        }
+      }
+    }
     for (const area of await this.listAreas()) {
       const dir = path.join(this.dir(area), 'checks');
       if (!fs.existsSync(dir)) continue;
@@ -187,6 +227,20 @@ export class FsMonitorStore {
     return readJson(this.agg(area, kind, monitorId), []).filter((r) => r[key] >= from && r[key] < to);
   }
 
+  /** All the monitors of the area in one go: rows of {kind} in [from, to), with the monitor id (RNF-42). */
+  async listAggregatesAll(area, kind, from, to) {
+    const key = kind === 'hourly' ? 'hour' : 'day';
+    const dir = path.join(this.dir(area), kind);
+    if (!fs.existsSync(dir)) return [];
+    const out = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue;
+      const monitorId = f.slice(0, -5);
+      for (const r of readJson(path.join(dir, f), [])) if (r[key] >= from && r[key] < to) out.push({ ...r, monitorId });
+    }
+    return out;
+  }
+
   async pruneHourly(before) {
     for (const area of await this.listAreas()) {
       const dir = path.join(this.dir(area), 'hourly');
@@ -223,12 +277,20 @@ export class FsMonitorStore {
     const list = this.list(area, 'events');
     const e = { id: `${event.at}-${Math.random().toString(36).slice(2, 8)}`, status: 'pending', ...event };
     list.push(e);
-    this.put(area, 'events', list.slice(-2000));
+    this.put(area, 'events', list.slice(-5000));
     return e;
   }
 
-  async listEvents(area, { status = null, limit = 200 } = {}) {
-    return this.list(area, 'events').filter((e) => !status || e.status === status).slice(-limit);
+  async listEvents(area, { status = null, limit = 200, from = 0 } = {}) {
+    return this.list(area, 'events').filter((e) => (!status || e.status === status) && e.at >= from).slice(-limit);
+  }
+
+  async pruneEvents(before) {
+    for (const area of ['', ...(await this.listAreas())]) {
+      const list = this.list(area, 'events');
+      const kept = list.filter((e) => e.at >= before);
+      if (kept.length !== list.length) this.put(area, 'events', kept);
+    }
   }
 
   async updateEvent(area, id, patch) {
@@ -300,6 +362,160 @@ export class FsMonitorStore {
   }
 
   /** Everything of an area (account deleted). */
+  // ---------------- variables and secrets (spec §13.9) ----------------
+
+  async listSecrets(area) {
+    return this.list(area, 'secrets');
+  }
+
+  async saveSecret(area, rec) {
+    return this.upsert(area, 'secrets', { ...rec, id: rec.name });
+  }
+
+  async deleteSecret(area, name) {
+    this.put(area, 'secrets', this.list(area, 'secrets').filter((s) => s.name !== name));
+  }
+
+  async addSecretLog(area, entry) {
+    this.put(area, 'secretlog', [...this.list(area, 'secretlog'), entry].slice(-1000));
+  }
+
+  async listSecretLog(area, limit = 200) {
+    return this.list(area, 'secretlog').slice(-limit).reverse();
+  }
+
+  // ---------------- local agents and their queue of runs (spec §13.14, ADR-0025) ----------------
+
+  async listAgents(area) {
+    return this.list(area, 'agents');
+  }
+
+  async getAgent(area, id) {
+    return this.list(area, 'agents').find((a) => a.id === id) || null;
+  }
+
+  async saveAgent(area, a) {
+    return this.upsert(area, 'agents', a);
+  }
+
+  async deleteAgent(area, id) {
+    this.put(area, 'agents', this.list(area, 'agents').filter((a) => a.id !== id));
+    const f = this.file('', 'agentjobs.json');
+    writeJson(f, readJson(f, []).filter((j) => j.agentId !== id));
+  }
+
+  async findAgentByHash(hash) {
+    for (const area of await this.listAreas()) {
+      const agent = this.list(area, 'agents').find((a) => a.hash === hash);
+      if (agent) return { area, agent };
+    }
+    return null;
+  }
+
+  async enqueueJob(job) {
+    const f = this.file('', 'agentjobs.json');
+    writeJson(f, [...readJson(f, []), { ...job, state: 'queued' }]);
+  }
+
+  async claimJobs(agentId, now, max) {
+    const f = this.file('', 'agentjobs.json');
+    const all = readJson(f, []);
+    const mine = all.filter((j) => j.agentId === agentId && j.state === 'queued').sort((a, b) => a.createdAt - b.createdAt).slice(0, max);
+    for (const j of mine) Object.assign(j, { state: 'claimed', claimedAt: now });
+    if (mine.length) writeJson(f, all);
+    return mine;
+  }
+
+  async getJob(id) {
+    return readJson(this.file('', 'agentjobs.json'), []).find((j) => j.id === id) || null;
+  }
+
+  async completeJob(id, agentId, result, now) {
+    const f = this.file('', 'agentjobs.json');
+    const all = readJson(f, []);
+    const j = all.find((x) => x.id === id && x.agentId === agentId && x.state === 'claimed');
+    if (!j) return false;
+    Object.assign(j, { state: 'done', doneAt: now, result });
+    writeJson(f, all);
+    return true;
+  }
+
+  async expireJob(id) {
+    const f = this.file('', 'agentjobs.json');
+    const all = readJson(f, []);
+    const j = all.find((x) => x.id === id && ['queued', 'claimed'].includes(x.state));
+    if (j) { j.state = 'expired'; writeJson(f, all); }
+  }
+
+  async pruneJobs(before) {
+    const f = this.file('', 'agentjobs.json');
+    writeJson(f, readJson(f, []).filter((j) => j.createdAt >= before));
+  }
+
+  // ---------------- status pages, communications, public links (spec §13.11) ----------------
+
+  async listStatusPages(area) {
+    return this.list(area, 'statuspages');
+  }
+
+  async getStatusPage(area, id) {
+    return this.list(area, 'statuspages').find((p) => p.id === id) || null;
+  }
+
+  async saveStatusPage(area, p) {
+    return this.upsert(area, 'statuspages', p);
+  }
+
+  async deleteStatusPage(area, id) {
+    this.put(area, 'statuspages', this.list(area, 'statuspages').filter((p) => p.id !== id));
+    this.put(area, 'statusupdates', this.list(area, 'statusupdates').filter((u) => u.pageId !== id));
+  }
+
+  /** A public page is found by its address, across every area (it is asked without a session). */
+  async findStatusPage({ slug = null, domain = null }) {
+    for (const area of await this.listAreas()) {
+      const page = this.list(area, 'statuspages').find((p) => (slug && p.slug === slug) || (domain && p.customDomain === domain));
+      if (page) return { area, page };
+    }
+    return null;
+  }
+
+  async listStatusUpdates(area, pageId, { limit = 100 } = {}) {
+    return this.list(area, 'statusupdates').filter((u) => u.pageId === pageId).sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  }
+
+  async getStatusUpdate(area, id) {
+    return this.list(area, 'statusupdates').find((u) => u.id === id) || null;
+  }
+
+  async saveStatusUpdate(area, u) {
+    return this.upsert(area, 'statusupdates', u);
+  }
+
+  async deleteStatusUpdate(area, id) {
+    this.put(area, 'statusupdates', this.list(area, 'statusupdates').filter((u) => u.id !== id));
+  }
+
+  async listPublicLinks(area) {
+    return this.list(area, 'publiclinks');
+  }
+
+  async savePublicLink(area, link) {
+    return this.upsert(area, 'publiclinks', { ...link, id: link.token });
+  }
+
+  async deletePublicLink(area, token) {
+    this.put(area, 'publiclinks', this.list(area, 'publiclinks').filter((l) => l.token !== token));
+  }
+
+  async findPublicLink(token) {
+    for (const area of await this.listAreas()) {
+      const link = this.list(area, 'publiclinks').find((l) => l.token === token);
+      if (link) return { area, link };
+    }
+    return null;
+  }
+
   async deleteArea(area) {
     fs.rmSync(this.dir(area), { recursive: true, force: true });
   }

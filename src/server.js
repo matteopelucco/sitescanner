@@ -8,10 +8,15 @@ import { storageFor, initStorage } from './storage/index.js';
 import { currentVercelBackend } from './storage/vercel/backend.js';
 import { cleanupOrphans } from './storage/vercel/storage.js';
 import { runRound, monitoringEnabled } from './monitor/engine.js';
-import { handleNotifyPublic } from './monitor/api.js';
+import { handleNotifyPublic, handleHeartbeatPublic, handleInternalCheck } from './monitor/api.js';
+import { handleAgentPublic } from './monitor/agent.js';
+import { handlePublic, domainPageFor } from './monitor/public.js';
+import { Workspaces, areaOf } from './auth/workspaces.js';
+import { allowedRequest } from './core/workspaces.js';
+import { handleApiV1 } from './api-v1.js';
 import { areaPolicy } from './policy.js';
 import { Auth, publicUser } from './auth/index.js';
-import { handleAuthApi, readSessionToken, OPEN_WITH_TEMP_PASSWORD } from './auth/http.js';
+import { handleAuthApi, readSessionToken, readWorkspaceId, OPEN_WITH_TEMP_PASSWORD } from './auth/http.js';
 import { renderIndexHtml, reportIndex, indexJs, scanJs, textJs } from './report/build.js';
 
 const TYPES = {
@@ -20,6 +25,9 @@ const TYPES = {
 };
 
 const webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
+// Pure modules of src/core/ that the web app imports as they are (no dependencies, no I/O)
+const SHARED = { '/app/assertions.js': path.join(path.dirname(fileURLToPath(import.meta.url)), 'core', 'assertions.js') };
+const appFile = (pathname) => (pathname === '/' ? path.join(webDir, 'index.html') : SHARED[pathname] || within(webDir, pathname.slice('/app'.length)));
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 // Files of the web app reachable without a session in multi-user mode (login page).
 const PUBLIC_APP_FILES = new Set(['/app/login.js', '/app/app.css']);
@@ -77,6 +85,34 @@ function singleUserHandler({ root, hostCheck }) {
       const h = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
       if (!LOOPBACK.has(h)) return sendText(res, 403, 'Host non ammesso');
     }
+    if (pathname.startsWith('/status/') || pathname.startsWith('/tv/') || pathname.startsWith('/badge/')) {
+      try {
+        if (await handlePublic(req, res, url, { ip: req.socket.remoteAddress })) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+    if (pathname.startsWith('/api/check/')) {
+      try {
+        if (await handleInternalCheck(req, res, url)) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+    if (pathname.startsWith('/api/agent/')) {
+      try {
+        if (await handleAgentPublic(req, res, url)) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+    if (pathname.startsWith('/hb/')) {
+      try {
+        if (await handleHeartbeatPublic(req, res, url, { ip: req.socket.remoteAddress })) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
     if (pathname.startsWith('/api/')) {
       if (!writeAllowed(req, `http://${req.headers.host}`)) return send(res, 403, { error: 'Richiesta non ammessa' });
       try {
@@ -89,7 +125,7 @@ function singleUserHandler({ root, hostCheck }) {
     }
     if (pathname === '/report') return res.writeHead(302, { location: '/report/' }).end();
     if (pathname === '/' || pathname.startsWith('/app/')) {
-      const file = pathname === '/' ? path.join(webDir, 'index.html') : within(webDir, pathname.slice('/app'.length));
+      const file = appFile(pathname);
       return file ? sendFile(req, res, file) : res.writeHead(404).end('Not found');
     }
     let file = within(root, pathname);
@@ -165,7 +201,10 @@ async function dailyMaintenance(req, res, auth) {
   await auth.pruneSessions();
   const backend = currentVercelBackend();
   const orphans = backend ? await cleanupOrphans(backend) : 0;
-  send(res, 200, { ok: true, orphans });
+  // RF-RPT-03: on the first day of the month, the reports of the previous one
+  let reports = [];
+  if (monitoringEnabled()) reports = await (await import('./monitor/reports.js')).sendMonthlyReports().catch((e) => { console.error(`Report mensili: ${e.message}`); return []; });
+  send(res, 200, { ok: true, orphans, reports: reports.length });
 }
 
 /** Monitoring areas of the active admins: they receive the alerts about the monitor itself (RF-MON-13). */
@@ -184,9 +223,10 @@ async function monitorRound(req, res, auth) {
 }
 
 function multiUserHandler({ root, trustProxy, authStore }) {
-  let auth = null;
+  let auth = null, workspaces = null;
   const ready = Promise.resolve(authStore || initStorage({ root })).then((store) => {
     auth = new Auth(store);
+    workspaces = new Workspaces(auth);
     return auth.bootstrap().catch((e) => console.error(`Primo admin non creato: ${e.message}`));
   });
   let lastPrune = 0;
@@ -206,6 +246,37 @@ function multiUserHandler({ root, trustProxy, authStore }) {
     if (pathname === '/api/cron/daily' && req.method === 'GET') return dailyMaintenance(req, res, auth).catch((e) => apiError(res, e, { hideInternal: true }));
     if (pathname === '/api/cron/monitor' && req.method === 'GET') return monitorRound(req, res, auth).catch((e) => apiError(res, e, { hideInternal: true }));
 
+    // the public pages, with no session (RF-PUB-01..06); a custom domain shows its page at the root (RF-PUB-04)
+    if (pathname.startsWith('/status/') || pathname.startsWith('/tv/') || pathname.startsWith('/badge/') || (['/', '/status.json'].includes(pathname) && ['GET', 'POST'].includes(req.method) && /\.[a-z]{2,}$/i.test(String(req.headers.host || '').replace(/:\d+$/, '')))) {
+      try {
+        const domainPage = !pathname.startsWith('/status/') && !pathname.startsWith('/tv/') && !pathname.startsWith('/badge/') ? await domainPageFor(req.headers.host) : null;
+        if ((domainPage || !['/', '/status.json'].includes(pathname)) && (await handlePublic(req, res, domainPage && pathname === '/status.json' ? new URL(`${url.origin}/status/${domainPage.page.slug}.json`) : url, { ip, secure, domainPage }))) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+    if (pathname.startsWith('/api/check/')) {
+      try {
+        if (await handleInternalCheck(req, res, url)) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+    if (pathname.startsWith('/api/agent/')) {
+      try {
+        if (await handleAgentPublic(req, res, url)) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+    if (pathname.startsWith('/hb/')) {
+      try {
+        if (await handleHeartbeatPublic(req, res, url, { ip })) return;
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+
     if (pathname.startsWith('/api/notify/') || pathname.startsWith('/api/telegram/')) {
       try {
         if (await handleNotifyPublic(req, res, url)) return;
@@ -221,6 +292,20 @@ function multiUserHandler({ root, trustProxy, authStore }) {
     const token = readSessionToken(req, secure);
     const session = await auth.authenticate(token);
 
+    // programs use /api/v1 with the token of a workspace, no session (RF-TEAM-04)
+    if (pathname.startsWith('/api/v1/')) {
+      try {
+        if (!writeAllowed(req, origin)) return send(res, 403, { error: 'Richiesta non ammessa' });
+        const bearer = /^Bearer (sst_[\w-]+)$/.exec(String(req.headers.authorization || ''));
+        if (!bearer) return send(res, 401, { error: 'Serve un token API: Authorization: Bearer sst_…' });
+        const t = await workspaces.authenticateToken(bearer[1]);
+        if (!t) return send(res, 401, { error: 'Token non valido o scaduto' });
+        return await handleApiV1(req, res, url, { st: storageFor(areaOf(t.workspace, t.user)), workspace: t.workspace, role: t.role, token: t.token, user: t.user });
+      } catch (e) {
+        return apiError(res, e, { hideInternal: true });
+      }
+    }
+
     if (pathname.startsWith('/api/')) {
       try {
         if (!writeAllowed(req, origin)) return send(res, 403, { error: 'Richiesta non ammessa' });
@@ -231,15 +316,19 @@ function multiUserHandler({ root, trustProxy, authStore }) {
             return send(res, 403, { error: 'Devi cambiare la password temporanea prima di continuare', mustChangePassword: true });
           }
         }
-        if (await handleAuthApi(req, res, url, { auth, ip, secure, session, token })) return;
-        const st = storageFor(session.user);
+        if (await handleAuthApi(req, res, url, { auth, ip, secure, session, token, workspaces })) return;
+        // the workspace the user works in (RF-TEAM-01): the personal one unless the selector says otherwise and they are a member
+        const { workspace, role } = await workspaces.resolve(session.user, readWorkspaceId(req));
+        const gate = allowedRequest(role, req.method, route);
+        if (!gate.ok) return send(res, 403, { error: gate.reason });
+        const st = storageFor(areaOf(workspace, session.user));
         const policy = areaPolicy(st);
         await handleApi(req, res, url, {
           storage: st,
           rebuildReport: false,
           maxJobs: policy.maxJobs || Infinity,
           // polling: job progress comes from the storage, shared by all the function instances (RF-RUN-05)
-          extra: { mode: 'multi', user: publicUser(session.user), polling: !!st.persistsJobs, warnings: adminWarnings(session.user), limits: { maxPages: policy.maxPages, maxConcurrency: policy.maxConcurrency } },
+          extra: { mode: 'multi', user: publicUser(session.user), workspace: { id: workspace.id, name: workspace.name, kind: workspace.kind, role }, polling: !!st.persistsJobs, warnings: adminWarnings(session.user), limits: { maxPages: policy.maxPages, maxConcurrency: policy.maxConcurrency } },
         });
       } catch (e) {
         apiError(res, e, { hideInternal: true });
@@ -252,13 +341,13 @@ function multiUserHandler({ root, trustProxy, authStore }) {
       return sendText(res, 401, 'Accesso richiesto');
     }
     if (pathname === '/' || pathname.startsWith('/app/')) {
-      const file = pathname === '/' ? path.join(webDir, 'index.html') : within(webDir, pathname.slice('/app'.length));
+      const file = appFile(pathname);
       return file ? sendFile(req, res, file) : sendText(res, 404, 'Not found');
     }
     if (session.user.mustChangePassword) return sendText(res, 403, 'Devi cambiare la password temporanea');
     if (pathname === '/report' || pathname.startsWith('/report/') || pathname.startsWith('/files/')) {
       try {
-        return await serveReport(req, res, pathname, storageFor(session.user));
+        return await serveReport(req, res, pathname, storageFor(areaOf((await workspaces.resolve(session.user, readWorkspaceId(req))).workspace, session.user)));
       } catch (e) {
         if (!(e instanceof UserError)) console.error(e);
         return sendText(res, e instanceof UserError ? 404 : 500, e instanceof UserError ? 'Not found' : 'Errore interno del server');

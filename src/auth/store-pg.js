@@ -32,6 +32,52 @@ export class PgAuthStore {
     return this.b.db;
   }
 
+  // ---------------- workspaces and API tokens (spec §13.10) ----------------
+
+  async listWorkspaces() {
+    return (await (await this.db()).query('SELECT data FROM workspaces ORDER BY id')).map((r) => r.data);
+  }
+
+  async getWorkspace(id) {
+    const rows = await (await this.db()).query('SELECT data FROM workspaces WHERE id = $1', [String(id)]);
+    return rows.length ? rows[0].data : null;
+  }
+
+  async saveWorkspace(w) {
+    await (await this.db()).query('INSERT INTO workspaces (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data', [w.id, JSON.stringify(w)]);
+    return w;
+  }
+
+  async deleteWorkspace(id) {
+    await (await this.db()).query('DELETE FROM workspaces WHERE id = $1', [String(id)]);
+  }
+
+  async listTokens(workspaceId) {
+    return (await (await this.db()).query('SELECT data FROM api_tokens WHERE workspace_id = $1 ORDER BY id', [String(workspaceId)])).map((r) => r.data);
+  }
+
+  async saveToken(t) {
+    await (await this.db()).query('INSERT INTO api_tokens (id, workspace_id, hash, data) VALUES ($1, $2, $3, $4::jsonb)', [t.id, t.workspaceId, t.hash, JSON.stringify(t)]);
+    return t;
+  }
+
+  async getTokenByHash(hash) {
+    const rows = await (await this.db()).query('SELECT data FROM api_tokens WHERE hash = $1', [hash]);
+    return rows.length ? rows[0].data : null;
+  }
+
+  async touchToken(id, at) {
+    await (await this.db()).query("UPDATE api_tokens SET data = jsonb_set(data, '{lastUsedAt}', to_jsonb($2::text)) WHERE id = $1", [id, at]);
+  }
+
+  async deleteToken(id) {
+    await (await this.db()).query('DELETE FROM api_tokens WHERE id = $1', [id]);
+  }
+
+  async deleteTokensOf(workspaceId) {
+    await (await this.db()).query('DELETE FROM api_tokens WHERE workspace_id = $1', [String(workspaceId)]);
+  }
+
   async listUsers() {
     return (await (await this.db()).query('SELECT * FROM users ORDER BY username')).map(userOut);
   }

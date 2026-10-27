@@ -1,0 +1,494 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/matteopelucco/sitescanner/docs/specs/monitors.schema.json",
+  "title": "sitescanner.monitors.yml",
+  "description": "Monitoring as code (spec §13.13). I campi sono quelli dell'API; credenziali e token non ci sono, si usano le variabili {{NOME}}.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "monitors"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "monitors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "description": "Chiave stabile con cui il file ritrova il monitor a ogni apply."
+          },
+          "type": {
+            "enum": [
+              "http",
+              "api",
+              "heartbeat",
+              "dns",
+              "tcp",
+              "ssl"
+            ],
+            "default": "http"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "url": {
+            "type": "string",
+            "description": "Indirizzo http o https; può contenere {{VARIABILI}}."
+          },
+          "method": {
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "OPTIONS"
+            ]
+          },
+          "assertions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "source",
+                "comparison"
+              ],
+              "properties": {
+                "source": {
+                  "enum": [
+                    "status",
+                    "header",
+                    "body",
+                    "json",
+                    "time",
+                    "url"
+                  ]
+                },
+                "property": {
+                  "type": "string"
+                },
+                "comparison": {
+                  "enum": [
+                    "equals",
+                    "notEquals",
+                    "contains",
+                    "notContains",
+                    "gt",
+                    "lt",
+                    "matches",
+                    "empty",
+                    "notEmpty",
+                    "in"
+                  ]
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                },
+                "ci": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "Tutte devono essere vere."
+          },
+          "bodyType": {
+            "enum": [
+              "none",
+              "text",
+              "json"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Nome → valore; i segreti con {{NOME}}."
+          },
+          "intervalMin": {
+            "enum": [
+              5,
+              10,
+              15,
+              30,
+              60
+            ]
+          },
+          "timeoutS": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 60
+          },
+          "degradedMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "failedMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "notifyDegraded": {
+            "type": "boolean"
+          },
+          "followRedirects": {
+            "type": "boolean"
+          },
+          "skipSsl": {
+            "type": "boolean"
+          },
+          "shouldFail": {
+            "type": "boolean"
+          },
+          "ipVersion": {
+            "enum": [
+              "auto",
+              "4",
+              "6"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "sslDays": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 365
+            }
+          },
+          "slaPct": {
+            "type": "number",
+            "minimum": 90,
+            "maximum": 100
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "retry": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "strategy": {
+                "enum": [
+                  "none",
+                  "single",
+                  "fixed",
+                  "linear",
+                  "exponential"
+                ]
+              },
+              "attempts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              },
+              "baseSec": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 60
+              },
+              "onlyNetwork": {
+                "type": "boolean"
+              },
+              "sameLocation": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "locStrategy": {
+            "enum": [
+              "rotate",
+              "parallel"
+            ]
+          },
+          "alertPolicy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "failures",
+                  "minutes"
+                ]
+              },
+              "failures": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "minutes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 60
+              },
+              "locationPct": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "reminders": {
+                "type": "object",
+                "properties": {
+                  "max": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10
+                  },
+                  "everyMin": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 240
+                  }
+                }
+              },
+              "events": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "enum": [
+                    "down",
+                    "up",
+                    "degraded",
+                    "cert",
+                    "maintenance",
+                    "heartbeat"
+                  ]
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "vars": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Nomi dei canali di notifica (pagina Notifiche)."
+          },
+          "expectedMin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "toleranceMin": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "tcpSend": {
+            "type": "string"
+          },
+          "tcpExpect": {
+            "type": "string"
+          },
+          "minTls": {
+            "enum": [
+              "TLSv1.2",
+              "TLSv1.3"
+            ]
+          },
+          "checkDomain": {
+            "type": "boolean"
+          },
+          "domainDays": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "dnsName": {
+            "type": "string"
+          },
+          "recordType": {
+            "enum": [
+              "A",
+              "AAAA",
+              "CNAME",
+              "MX",
+              "TXT",
+              "NS"
+            ]
+          },
+          "resolver": {
+            "type": "string",
+            "description": "system, cloudflare, google o un indirizzo IP[:porta]."
+          },
+          "dnsAssertions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "comparison"
+              ],
+              "properties": {
+                "comparison": {
+                  "enum": [
+                    "contains",
+                    "notContains",
+                    "equalsSet",
+                    "matches",
+                    "notEmpty"
+                  ]
+                },
+                "target": {
+                  "type": "string"
+                },
+                "ci": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
+    "maintenance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "durationMin"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "once",
+              "weekly",
+              "monthly",
+              "repeat"
+            ]
+          },
+          "start": {
+            "type": "string",
+            "description": "Data e ora ISO, per «once»."
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            },
+            "description": "0 = domenica, per «weekly»."
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "dayOfMonth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "durationMin": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 1440
+          },
+          "monitors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Id dei monitor del file."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "every": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "description": "Per «repeat»: ogni N giorni (fino a 365), settimane (52) o mesi (12)."
+          },
+          "unit": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ]
+          },
+          "until": {
+            "type": "string",
+            "description": "Per «repeat»: l'ultimo giorno (YYYY-MM-DD) o istante ISO; vuoto = senza fine."
+          }
+        }
+      }
+    }
+  }
+}

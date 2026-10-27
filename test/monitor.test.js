@@ -110,10 +110,11 @@ for (const kind of STORES) {
       assert.equal((await store.getMonitor(area, m.id)).state.status, 'up');
 
       // the keyword is checked (RF-MON-11)
-      await store.saveMonitor(area, { ...(await store.getMonitor(area, m.id)), keyword: { text: 'Carrello', mode: 'present', caseInsensitive: false } });
+      const withWord = await store.getMonitor(area, m.id);
+      await store.saveMonitor(area, { ...withWord, assertions: [...withWord.assertions, { source: 'body', comparison: 'contains', target: 'Carrello' }] });
       r = await round();
       assert.equal(r.events[0].cause.message, 'Parola «Carrello» non trovata');
-      await store.saveMonitor(area, { ...(await store.getMonitor(area, m.id)), keyword: null });
+      await store.saveMonitor(area, { ...(await store.getMonitor(area, m.id)), assertions: withWord.assertions });
       r = await round();
       assert.equal(r.events[0].type, 'up');
 

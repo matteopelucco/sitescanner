@@ -25,7 +25,7 @@ test('RF-KPI-07: KPIs from hourly aggregates equal KPIs from raw data', () => {
   for (let t = T0; t < now; t += interval) {
     if (t >= T0 + 10 * HOUR && t < T0 + 12 * HOUR) continue; // no rounds
     if (t >= T0 + DAY + 14 * HOUR && t < T0 + DAY + 18 * HOUR) continue; // paused
-    checks.push({ at: t, outcome: t % (7 * interval) === 0 ? 'slow' : 'ok', ms: 100 + (t / interval) % 300 });
+    checks.push({ at: t, outcome: t % (7 * interval) === 0 ? 'degraded' : 'ok', ms: 100 + (t / interval) % 300 });
   }
   const maint = [[T0 + 2 * DAY + 3 * HOUR, T0 + 2 * DAY + 4 * HOUR]];
   const incidents = [
@@ -71,13 +71,13 @@ test('availability, budget, response percentiles, health', () => {
   assert.equal(histogramPercentile(histogram([10, 20, 30, 400, 900]), 0.5), 50);
 
   const ok = { availability: 99.95, coverage: 1, response: { p95: 300 } };
-  assert.deepEqual(health({ status: 'up', k30: ok, slaPct: 99.9, slowMs: 1000, certDays: 60 }), { level: 'buona', reasons: [] });
+  assert.deepEqual(health({ status: 'up', k30: ok, slaPct: 99.9, degradedMs: 1000, certDays: 60 }), { level: 'buona', reasons: [] });
   assert.equal(health({ status: 'down', k30: ok, slaPct: 99.9 }).level, 'critica');
   assert.equal(health({ status: 'up', k30: { ...ok, availability: 99.85 }, slaPct: 99.9 }).level, 'attenzione');
   assert.equal(health({ status: 'up', k30: { ...ok, availability: 99.7 }, slaPct: 99.9 }).level, 'critica');
   assert.match(health({ status: 'up', k30: ok, certDays: 5 }).reasons[0], /scade tra 5 giorni/);
   assert.equal(health({ status: 'up', k30: ok, certDays: 10 }).level, 'attenzione');
-  assert.match(health({ status: 'up', k30: ok, slowMs: 200 }).reasons[0], /p95 300 ms/);
+  assert.match(health({ status: 'up', k30: ok, degradedMs: 200 }).reasons[0], /p95 300 ms/);
 });
 
 test('expected status, durations', () => {

@@ -214,14 +214,18 @@ export class CrawlRun {
   }
 
   async getText(url) {
-    try {
-      const r = await this.fetch(url, { headers: this.headers, signal: this.timeout() });
-      if (!r.ok) return null;
-      return await r.text();
-    } catch {
-      this.signal?.throwIfAborted();
-      return null;
+    // a second try: a keep-alive connection that the server closed in the meantime fails once with ECONNRESET, and a
+    // robots.txt that «does not exist» for that reason would make the crawl ignore its rules
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await this.fetch(url, { headers: this.headers, signal: this.timeout() });
+        if (!r.ok) return null;
+        return await r.text();
+      } catch {
+        this.signal?.throwIfAborted();
+      }
     }
+    return null;
   }
 
   enqueue(url, depth, from, list) {

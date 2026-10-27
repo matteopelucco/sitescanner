@@ -166,12 +166,74 @@ Scan e inventari girano **a passi** su **Vercel Queues** (Function `api/steps.js
 Controlla a intervalli regolari (da 5 a 60 minuti) che i siti rispondano, ne tiene lo storico e calcola i KPI: disponibilità, downtime, incidenti, MTTR, MTBF, tempi di risposta, budget di errore rispetto all'obiettivo SLA, scadenza del certificato e una **salute** a tre livelli con il motivo ([specifica §12](docs/specs/12-monitoraggio.md)). Gira **su Vercel**, con un Cron ogni 5 minuti (`/api/cron/monitor`, protetto da `CRON_SECRET`); in locale solo per sviluppo, con `SITESCANNER_MONITOR_DEV=1` (`sitescanner ui` fa un giro ogni 5 minuti, `sitescanner monitor run` un giro solo).
 
 - **Monitor**: URL e nome; nelle opzioni avanzate intervallo, timeout, metodo, status attesi, keyword che deve (o non deve) comparire, soglia di lentezza, avvisi sul certificato, tag, obiettivo SLA, header e basic auth. Si aggiungono anche in blocco (un URL per riga), dai siti di sitescanner (un monitor per ambiente) o da CSV.
+- **Esiti e soglie**: ogni controllo è riuscito, *degradato* (più lento della soglia di degrado, 3 secondi di default: non apre incidenti) o fallito (oltre la soglia di guasto, per default il timeout). Dal form: «Esegui una prova» fa un controllo con le impostazioni correnti senza salvare e mostra risposta, header e inizio del corpo; i monitor si **silenziano** (per un'ora, 8, 24 o fino alla riattivazione: i controlli e gli incidenti continuano, gli avvisi no), si **duplicano** e hanno una descrizione che compare negli avvisi come «note per chi interviene». Opzioni della richiesta: seguire o no i redirect, ignorare gli errori del certificato, «la richiesta deve fallire» (utile per verificare che un'area riservata non sia pubblica), versione IP.
+- **Asserzioni**: oltre allo status (200–399 di default per un sito, 200–299 per un'API) si possono verificare header, testo o JSON della risposta (percorsi come `$.stato` o `$.voci[*].id`), il tempo di risposta e l'indirizzo finale, con confronti come «uguale», «contiene», «corrisponde a un'espressione», «maggiore di», «vuoto»; devono essere tutte vere. Il tipo **API** aggiunge metodo, corpo (testo o JSON) e Content-Type, per controllare un endpoint oltre alla pagina. «Esegui una prova» mostra per ogni asserzione se è passata e i tempi di ogni fase della richiesta (DNS, connessione, TLS, attesa, download).
+- **Dettaglio dei run**: nella pagina del monitor si sceglie il periodo (oggi, da 1 ora a 90 giorni, o un intervallo), si vedono p50/p95/p99, il grafico dei tempi per fase e gli errori raggruppati per messaggio; l'elenco dei run si filtra per esito, retry e gruppo. Dei run falliti, degradati e di uno riuscito all'ora si conserva il dettaglio completo (header senza cookie né chiavi, asserzioni, redirect, IP, TLS, inizio del corpo); ogni incidente mostra il suo primo run fallito.
+- **Quando avvisare**: nella pagina «Notifiche» si sceglie se avvisare dopo N controlli falliti di fila o quando il sito è giù da X minuti, e quanti promemoria mandare e ogni quanto; un guasto breve che finisce prima della soglia non manda nulla. Ogni canale (email, Slack, Telegram) riceve solo i tipi di evento scelti, e può essere limitato ai monitor con certi tag (es. l'email del cliente per `cliente:acme`). Un monitor può avere una politica propria. **Cronologia** e **Registro avvisi** rispondono a «cosa è successo» e «perché non mi è arrivato l'avviso»; **Nuovi problemi** elenca cosa ha iniziato a fallire negli ultimi giorni.
+- **Elenco dei monitor**: schede Tutti / Su / Degradati / Giù / In pausa con i conteggi, periodo (24 ore–90 giorni) che ricalcola disponibilità, media e p95, colonne ordinabili e mini-barre degli ultimi 20 run. La ricerca si scrive (`tag:cliente:acme stato:giù tipo:api salute:critica`, `-tag:prod` per escludere) o si compone con i menu; le ricerche utili si salvano come **viste**, anche come pagina iniziale. Il menu di riga permette di eseguire, modificare, duplicare, silenziare, mettere in pausa ed eliminare.
+- **Tipi di monitor**: oltre a «Sito web» e «API», un **Heartbeat** controlla un cron job (backup, generazione di feed): il job chiama un indirizzo segreto `/hb/<token>` (con `/start` e `/fail`, anche per misurare la durata) e se non chiama entro periodo + tolleranza il monitor va giù. **DNS** controlla i record di un nome (con resolver di sistema, 1.1.1.1, 8.8.8.8 o un indirizzo) e i loro valori; **TCP** una porta, con un testo da inviare e la risposta attesa, o la certezza che sia chiusa; **SSL e dominio** il certificato di un host (catena, nomi, protocollo minimo, scadenza) e la scadenza del dominio dal registro RDAP, una volta al giorno.
+- **Variabili e segreti**: nella pagina «Variabili» si definiscono valori da usare nei monitor come `{{NOME}}` (indirizzo, header, password, corpo, asserzioni): una *variabile* si legge, un *segreto* si scrive e non si rilegge, è cifrato con `SITESCANNER_SECRETS_KEY` (`openssl rand -base64 32`; per cambiarla, la vecchia va in `SITESCANNER_SECRETS_KEY_OLD` e si usa «Cifra di nuovo») e non compare mai nelle risposte né nei dati salvati. Un monitor può avere variabili proprie. La pagina «Tag» rinomina e unisce i tag in tutto lo spazio, con namespace (`cliente:acme`), descrizione e colore.
+- **Spazi di lavoro** (modalità multi-utente): ogni account ha uno spazio personale e può essere membro di spazi condivisi con colleghi, ognuno con un ruolo: *proprietario* (membri e token), *editor* (crea e modifica) o *lettore* (guarda e annota gli incidenti). Il selettore in alto cambia spazio; siti, scansioni, monitor, canali e variabili sono dello spazio. Per la CI si creano **token API** per spazio (lettura o scrittura, con scadenza), mostrati una sola volta.
+- **Nuovi tentativi e località**: prima di dichiarare un guasto un monitor riprova (una volta dopo 10 secondi, o con attesa fissa, lineare o esponenziale fino a 3 volte, anche solo per errori di rete). Può controllare da più **località** (Francoforte, Londra, Parigi, Washington: `SITESCANNER_LOCATIONS`), a rotazione o tutte insieme: è giù solo se fallisce almeno la percentuale scelta, e un guasto visto da una sola località è «guasto locale» e non apre incidenti. Le località diverse dalla regione principale sono eseguite da una Function per regione (piano Pro di Vercel, `SITESCANNER_INTERNAL_SECRET`).
+- **Comunicare lo stato**: la pagina «Stato pubblico» crea una **status page** per i clienti (`/status/<indirizzo>`): servizi con le barre a 90 giorni, comunicazioni scritte da voi («in analisi», «identificato», «risolto») e manutenzioni programmate, senza mai mostrare indirizzi interni, cause tecniche o IP; può avere una password ed è nascosta ai motori di ricerca di default. Una **dashboard TV** (`/tv/<token>`, link segreto e revocabile) mostra i guasti in grande per lo schermo dell'ufficio; i **badge** (`/badge/<token>.svg`) si mettono in un README. Per un **dominio personalizzato** (es. `status.cliente.it`): nella pagina si scrive il dominio, nel DNS del cliente si crea un `CNAME status → cname.vercel-dns.com` e il dominio si aggiunge al progetto Vercel (Settings → Domains); la pagina risponde alla radice del dominio.
+- **Report per i clienti**: la pagina «Report» dà, per un periodo (mese corrente o scorso, trimestre, intervallo libero) e un gruppo di monitor (per tag), disponibilità, downtime, incidenti, MTTR, tempi di risposta e se l'obiettivo SLA è stato rispettato, con i totali per tag pesati sul tempo monitorato; si scarica in **CSV** o in **PDF** per cliente (copertina, riepilogo, incidenti con durata e causa, manutenzioni). Un **report mensile automatico** manda il PDF del mese precedente, il primo del mese, agli indirizzi email confermati scelti.
+- **Agente locale (siti dietro VPN)**: in «Altro → Agenti» si crea un agente e si copia il comando `sitescanner monitor agent --url <deployment> --token ssa_…`, da avviare in una macchina che vede il sito (serve Node 20). L'agente chiede al servizio i controlli ogni 30 s, li esegue nella sua rete e riconsegna il risultato: nessuna porta in ingresso. Nei monitor compare come località «Privata · nome»; se l'agente non si fa sentire, i controlli falliscono subito spiegando perché e arriva un avviso. Il token si vede una volta sola; l'agente si ferma con errore se viene eliminato. Un controllo aspetta l'agente al massimo `SITESCANNER_AGENT_WAIT_MS` (60 s); ogni agente fa circa 2 richieste al minuto. Vedi [ADR-0025](docs/adr/0025-agente-locale-come-localita-privata-il-servizio-mette-in-cod.md).
+- **Monitoring as code e test dalla CI**: i monitor si descrivono in un file `sitescanner.monitors.yml` nel repository del sito (schema in [docs/specs/monitors.schema.json](docs/specs/monitors.schema.json)); `sitescanner monitor apply` allinea il servizio al file (con `--dry-run` mostra il piano: crea, modifica campo per campo, elimina), è idempotente e tocca solo i monitor «gestiti da codice», che dall'interfaccia non si modificano (si duplicano). «Esporta come codice» (menu del monitor) scrive il YAML di quelli che esistono già. `sitescanner monitor test --base-url <anteprima>` prova i monitor del file su un'anteprima (per esempio la preview di Vercel del ramo) senza toccare lo storico e **esce con 1 se un'asserzione fallisce**. Servono l'indirizzo del servizio e un token API di scrittura (pagina «Spazi di lavoro»), in `SITESCANNER_URL` e `SITESCANNER_TOKEN`.
+
+  ```yaml
+  # sitescanner.monitors.yml
+  version: 1
+  monitors:
+    - id: negozio
+      type: http
+      name: Negozio
+      url: https://www.acme.it/
+      tags: [cliente:acme, prod]
+      assertions:
+        - { source: status, comparison: in, target: "200" }
+        - { source: body, comparison: contains, target: Carrello }
+      channels: [Slack ops]          # per nome, dalla pagina Notifiche
+    - id: backup
+      type: heartbeat
+      name: Backup notturno
+      expectedMin: 1440
+  ```
+
+  ```yaml
+  # .github/workflows/monitor.yml — prova la preview a ogni pull request, applica al merge su main
+  name: monitor
+  on:
+    pull_request:
+    push: { branches: [main] }
+  env:
+    SITESCANNER_URL: ${{ vars.SITESCANNER_URL }}
+    SITESCANNER_TOKEN: ${{ secrets.SITESCANNER_TOKEN }}
+  jobs:
+    test-preview:
+      if: github.event_name == 'pull_request'
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-node@v4
+          with: { node-version: 22 }
+        - run: npm i -g sitescanner
+        - run: sitescanner monitor test --base-url "${{ env.PREVIEW_URL }}"   # esce con 1 se un controllo fallisce
+    apply:
+      if: github.ref == 'refs/heads/main'
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-node@v4
+          with: { node-version: 22 }
+        - run: npm i -g sitescanner
+        - run: sitescanner monitor apply
+  ```
 - **Incidenti**: un errore si ripete dopo 10 secondi prima di dichiarare il sito giù; l'incidente registra cause, estratto della risposta e nota. Se in un giro falliscono per rete metà dei siti (almeno 5) e anche due URL di riferimento, il problema è la rete del monitor: il giro viene scartato.
-- **Manutenzione** (facoltativa): finestre singole, settimanali o mensili, per monitor o per tag, oppure «in manutenzione per 15/30/60 minuti» dalla dashboard; i controlli continuano ma non aprono incidenti e quel tempo non conta nei KPI.
+- **Manutenzione** (facoltativa): finestre singole, settimanali, mensili o che si ripetono ogni N giorni, settimane o mesi (con una data di fine facoltativa), per monitor o per tag, oppure «in manutenzione per 15/30/60 minuti» dalla dashboard; i controlli continuano ma non aprono incidenti e quel tempo non conta nei KPI.
 - **Dashboard**: prima i siti giù e quelli critici; filtri per tag (con i KPI del gruppo, es. «i siti del cliente X»), stato, salute e testo; 90 giorni a barre, ultime 24 ore, incidenti, certificati in scadenza, azioni in blocco.
 - **Chi controlla il monitor**: se i giri si fermano la dashboard lo mostra dopo 12 minuti; per saperlo anche a dashboard chiusa imposta `SITESCANNER_HEARTBEAT_URL` con l'URL di un servizio *dead man's switch* (es. un check di [healthchecks.io](https://healthchecks.io) con periodo 5 minuti e tolleranza 7): ogni giro lo chiama, e se smette il servizio ti avvisa.
 
-**Notifiche** (pagina «Notifiche», per account): email (via [Resend](https://resend.com): `RESEND_API_KEY` e `SITESCANNER_EMAIL_FROM` su un dominio verificato; ogni indirizzo va confermato con il link ricevuto), Slack (URL di un Incoming Webhook) e Telegram (un bot unico del deploy: `SITESCANNER_TELEGRAM_BOT_TOKEN`, `SITESCANNER_TELEGRAM_WEBHOOK_SECRET`, poi `sitescanner monitor telegram-webhook https://<dominio>`; l'utente collega la chat con un link valido 15 minuti). Avvisi di giù, di nuovo su, certificato in scadenza o scaduto, e a scelta lentezza e promemoria; ritardo di notifica per monitor, più di 3 cambi di stato insieme in un solo messaggio, al massimo 30 messaggi in 10 minuti per canale, 3 nuovi tentativi in caso di errore e canale segnalato «in errore» (con un'email, se c'è un indirizzo attivo); notifica di prova; orari nel fuso dell'account. I link negli avvisi usano `SITESCANNER_PUBLIC_URL` (su Vercel l'URL di produzione).
+**Notifiche** (pagina «Notifiche», per account): email (via [Resend](https://resend.com): `RESEND_API_KEY` e `SITESCANNER_EMAIL_FROM` su un dominio verificato; ogni indirizzo va confermato con il link ricevuto), Slack (URL di un Incoming Webhook), Microsoft Teams (webhook di Workflows) e Discord (URL del webhook del canale), un **webhook** tuo (riceve il JSON dell'evento firmato con HMAC-SHA256 nelle intestazioni `x-sitescanner-timestamp` e `x-sitescanner-signature`, `sha256=` + HMAC di `timestamp.corpo` con il segreto `whsec_…` mostrato una sola volta) e Telegram (un bot unico del deploy: `SITESCANNER_TELEGRAM_BOT_TOKEN`, `SITESCANNER_TELEGRAM_WEBHOOK_SECRET`, poi `sitescanner monitor telegram-webhook https://<dominio>`; l'utente collega la chat con un link valido 15 minuti). Avvisi di giù, di nuovo su, certificato in scadenza o scaduto, e a scelta lentezza e promemoria; ritardo di notifica per monitor, più di 3 cambi di stato insieme in un solo messaggio, al massimo 30 messaggi in 10 minuti per canale, 3 nuovi tentativi in caso di errore e canale segnalato «in errore» (con un'email, se c'è un indirizzo attivo); notifica di prova; orari nel fuso dell'account. I link negli avvisi usano `SITESCANNER_PUBLIC_URL` (su Vercel l'URL di produzione).
 
 Le richieste usano lo user agent `sitescanner-monitor/<versione>`: mettilo in allowlist se un firewall o un WAF filtra i bot. Altre variabili: `SITESCANNER_MAX_MONITORS_PER_USER` (200), `SITESCANNER_MON_RAW_DAYS` (30 giorni di controlli grezzi; gli aggregati orari restano 13 mesi, quelli giornalieri e gli incidenti sempre), `SITESCANNER_MON_CANARIES` (URL di riferimento).
 
