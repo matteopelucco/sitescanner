@@ -40,6 +40,14 @@ test('diagnoseScan groups issues by code, worst severity first', () => {
   assert.deepEqual(d.inlinks['/a'], ['/']);
   assert.equal(d.inlinks['/'], undefined);
 
+  // a page reached through a redirect is linked from the page that redirects
+  const r = diagnoseScan({ pages: [
+    { key: '/', status: 200, links: { internal: ['/old'] }, redirects: [], issues: [] },
+    { key: '/old', status: 301, links: { internal: [] }, redirects: [{ status: 301 }], issues: [] },
+    { key: '/new', status: 200, foundFrom: '/old', links: { internal: [] }, redirects: [], issues: [] },
+  ], issues: [] });
+  assert.deepEqual(r.inlinks['/new'], ['/old']);
+
   // pages: worst first; site issues are attributed to the pages they involve
   assert.deepEqual(d.pages.map((p) => p.key).slice(0, 2), ['/b', '/c']);
   const home = d.pages.find((p) => p.key === '/');

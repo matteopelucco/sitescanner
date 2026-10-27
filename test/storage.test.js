@@ -229,3 +229,14 @@ test('storage [vercel]: jobs are shared through the database', async () => {
     await b.db.close();
   }
 });
+
+test('storage [vercel]: every table has row level security, so a Supabase Data API shows nothing', async () => {
+  const b = await pgliteBackend();
+  try {
+    await new VercelStorage(b, 'single').listInventories(); // applies the migrations
+    const open = await b.db.query("SELECT relname FROM pg_class WHERE relkind = 'r' AND relnamespace = 'public'::regnamespace AND NOT relrowsecurity ORDER BY relname");
+    assert.deepEqual(open.map((r) => r.relname), [], 'a table of a migration without ENABLE ROW LEVEL SECURITY');
+  } finally {
+    await b.db.close();
+  }
+});

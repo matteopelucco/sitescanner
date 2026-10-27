@@ -47,7 +47,7 @@ const state = {
   jobs: [],        // newest first
   view: null,      // { name, refresh?() } of the current page
   inv: null,       // inventory open in #/inventory/<id>
-  invPages: { q: '', filter: '', sort: 'clickDepth', dir: 1, limit: 200 },
+  invPages: { q: '', filter: '', sort: 'clickDepth', dir: 1, limit: 200, open: new Set() },
   openTree: new Set(['/']),
 };
 
@@ -749,9 +749,24 @@ const PAGE_FILTERS = {
   orphan: ['Non collegate (solo sitemap)', (p) => p.html && p.clickDepth === null],
   nositemap: ['Collegate ma non in sitemap', (p) => p.html && p.clickDepth !== null && !p.inSitemap],
   errors: ['Errori e 4xx/5xx', (p) => p.error || p.status >= 400],
+  siblings: ['Host fratelli (altri sottodomini)', (p) => !!p.boundary],
   redirects: ['Redirect', (p) => !!p.redirectTo],
 };
 const PAGE_COLS = [['key', 'URL'], ['status', 'Stato'], ['clickDepth', 'Click', true], ['urlDepth', 'Livelli URL', true], ['inlinks', 'Link entranti', true], ['outlinks', 'Link uscenti', true], ['inSitemap', 'Sitemap'], ['bytes', 'Peso', true], ['responseMs', 'ms', true]];
+
+// Who links to a page (RF-INV-17): always shown, a few at a time, for pages that do not load; for the others on demand.
+// a page of a sibling host is stored with the path only: its address is on its own host
+const pageUrl = (p) => (p.boundary && p.host ? `${new URL(state.inv.baseUrl).protocol}//${p.host}${p.key}` : new URL(p.key, state.inv.baseUrl).href);
+const isBroken = (p) => !!p.error || p.status >= 400;
+function referrersOf(p, o) {
+  const from = p.linkedFrom || [];
+  const open = o.open.has(p.key);
+  if (!from.length) return isBroken(p) ? '<div class="muted small">Linkata da: nessuna pagina (solo sitemap o URL di partenza)</div>' : '';
+  if (!open && !isBroken(p)) return '';
+  const shown = open ? from : from.slice(0, 3);
+  const more = p.inlinks - shown.length;
+  return `<div class="muted small refs">Linkata da: ${shown.map((k) => `<a href="${esc(new URL(k, state.inv.baseUrl).href)}" target="_blank" rel="noopener noreferrer">${esc(k)}</a>`).join(', ')}${more > 0 ? ` <button class="linkbtn" data-refs="${esc(p.key)}">${open ? 'altre ' : '… altre '}${fmtNum(more)}</button>` : ''}</div>`;
+}
 
 function pagesTable() {
   const inv = state.inv, o = state.invPages;
@@ -770,9 +785,9 @@ function pagesTable() {
     <div class="tablewrap"><table>
     <thead><tr>${PAGE_COLS.map(([k, l, n]) => `<th class="sort${n ? ' num' : ''}" data-sort="${k}">${l}${o.sort === k ? (o.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
     <tbody>${rows.slice(0, o.limit).map((p) => `<tr>
-      <td class="key"><a href="${esc(new URL(p.key, inv.baseUrl).href)}" target="_blank" rel="noopener noreferrer">${esc(p.key)}</a>${p.title ? `<div class="muted small">${esc(p.title)}</div>` : ''}${p.redirectTo ? `<div class="muted small">→ ${esc(p.redirectTo)}</div>` : ''}</td>
+      <td class="key"><a href="${esc(pageUrl(p))}" target="_blank" rel="noopener noreferrer">${esc(p.key)}</a>${p.boundary ? ` <span class="tag info" title="Pagina di un altro host del sito, trovata da un link: non se ne seguono i link">host fratello</span><div class="muted small">Su <strong>${esc(p.host)}</strong>, non sull'host principale: trovata da un link del sito</div>` : ''}${p.title ? `<div class="muted small">${esc(p.title)}</div>` : ''}${p.redirectTo ? `<div class="muted small">→ ${esc(p.redirectTo)}</div>` : ''}${referrersOf(p, o)}</td>
       <td>${st(p)}</td><td class="num">${p.clickDepth ?? '<span class="muted" title="non raggiungibile con i link dalla partenza">—</span>'}</td><td class="num">${p.urlDepth}</td>
-      <td class="num">${fmtNum(p.inlinks)}</td><td class="num">${fmtNum(p.outlinks)}</td><td>${p.inSitemap ? '✓' : ''}</td>
+      <td class="num">${p.linkedFrom && p.linkedFrom.length ? `<button class="linkbtn" data-refs="${esc(p.key)}" aria-expanded="${o.open.has(p.key)}" title="Mostra chi linka questa pagina">${fmtNum(p.inlinks)}</button>` : fmtNum(p.inlinks)}</td><td class="num">${fmtNum(p.outlinks)}</td><td>${p.inSitemap ? '✓' : ''}</td>
       <td class="num">${fmtBytes(p.bytes)}</td><td class="num">${fmtNum(p.responseMs)}</td></tr>`).join('')}</tbody></table></div>
     ${rows.length > o.limit ? '<p><button class="btn small" id="morePages">Mostra altri</button></p>' : ''}`;
 }
@@ -783,6 +798,11 @@ function drawPages() {
     const k = th.dataset.sort;
     state.invPages.dir = state.invPages.sort === k ? -state.invPages.dir : ['inlinks', 'outlinks', 'bytes', 'responseMs', 'clickDepth', 'urlDepth'].includes(k) ? -1 : 1;
     state.invPages.sort = k;
+    drawPages();
+  };
+  for (const b of $$('[data-refs]')) b.onclick = () => {
+    const open = state.invPages.open;
+    if (!open.delete(b.dataset.refs)) open.add(b.dataset.refs);
     drawPages();
   };
   const more = $('#morePages');
@@ -827,7 +847,7 @@ async function viewInventory(id, params = new URLSearchParams()) {
     await mountMapViews({ root: $('#mapRoot'), id: inv.id, tab, params, api, esc, fmtNum, site: inv.site, sites: configuredSites() });
     return;
   }
-  state.invPages = { q: '', filter: '', sort: 'clickDepth', dir: 1, limit: 200 };
+  state.invPages = { q: '', filter: '', sort: 'clickDepth', dir: 1, limit: 200, open: new Set() };
   state.openTree = new Set(['/', ...inv.tree.children.slice(0, 1).map((c) => c.path)]);
   const s = inv.summary;
   const pct = (n, d) => (d ? `${Math.round((n / d) * 100)}%` : '—');

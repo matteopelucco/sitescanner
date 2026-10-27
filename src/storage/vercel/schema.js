@@ -202,6 +202,20 @@ export const MIGRATIONS = [
       ALTER TABLE inventories ADD COLUMN IF NOT EXISTS overlay jsonb;
     `,
   },
+  {
+    version: 11,
+    name: 'row level security su ogni tabella (Supabase espone lo schema public via API con la chiave anon)',
+    // The app connects as the table owner, which RLS does not bind; with no policy, anyone else (the anon and
+    // authenticated roles of a Supabase Data API) sees nothing. Every table of a later migration must do the same:
+    // test/storage.test.js checks it. On a plain Postgres (Neon) it changes nothing.
+    sql: `
+      DO $$ DECLARE t record; BEGIN
+        FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+          EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t.tablename);
+        END LOOP;
+      END $$;
+    `,
+  },
 ];
 
 // Any number would do, as long as it is fixed: it identifies the migration lock.

@@ -278,9 +278,16 @@
     const cats = [...new Set(d.codes.map((c) => c.category))].sort();
     const sevCount = (s) => d.codes.filter((c) => c.severity === s).reduce((n, c) => n + c.occurrences, 0);
     const pageLink = (k) => `<span class="plink" data-page="${esc(k)}">${esc(k)}</span>`;
-    const item = (it) => (it.pages
+    // a page that does not load: who links to it is what tells where to fix it
+    const REF_CODES = new Set(['http-4xx', 'http-5xx', 'fetch-failed', 'redirect-loop']);
+    const referrers = (code, key) => {
+      if (!REF_CODES.has(code)) return '';
+      const from = d.inlinks[key] || [];
+      return `<div class="plinks"><span class="hint">Linkata da:</span> ${from.length ? `${from.slice(0, 10).map(pageLink).join(' ')}${from.length > 10 ? ` <span class="hint">… altre ${from.length - 10}</span>` : ''}` : '<span class="hint">nessuna pagina (trovata da sitemap o URL di partenza)</span>'}</div>`;
+    };
+    const item = (it, code) => (it.pages
       ? `<tr><td></td><td colspan="4" class="msg">${esc(it.message)}<div class="plinks">${it.pages.slice(0, 50).map(pageLink).join(' ')}${it.pages.length > 50 ? ` <span class="hint">… altre ${it.pages.length - 50}</span>` : ''}</div></td></tr>`
-      : `<tr class="click" data-page="${esc(it.key)}"><td></td><td class="key" colspan="4">${esc(it.key)} <span class="hint">— ${esc(it.message)}</span></td></tr>`);
+      : `<tr class="click" data-page="${esc(it.key)}"><td></td><td class="key" colspan="4">${esc(it.key)} <span class="hint">— ${esc(it.message)}</span>${referrers(code, it.key)}</td></tr>`);
     return `
       <div class="toolbar">
         ${SEVERITIES.map((s) => `<button class="chip${state.sev.has(s) ? ' on' : ''}" data-sev="${s}"><span class="dot ${s}"></span>${s} ${sevCount(s)}</button>`).join('')}
@@ -294,7 +301,7 @@
           const open = state.openIssue === c.code;
           const items = !open ? [] : q && !matchCode(c) ? c.items.filter(matchItem) : c.items;
           return `<tr class="click" data-issue="${esc(c.code)}"><td>${sevBadge(c.severity)}</td><td>${esc(c.label)} <code class="hint">${esc(c.code)}</code> ${open ? '▾' : '▸'}</td><td class="hint">${esc(c.category)}</td><td class="num">${fmtNum(c.occurrences)}</td><td class="num">${fmtNum(c.pages)}</td></tr>
-            ${items.slice(0, 300).map(item).join('')}
+            ${items.slice(0, 300).map((it) => item(it, c.code)).join('')}
             ${items.length > 300 ? `<tr><td></td><td colspan="4" class="hint">… altre ${items.length - 300} occorrenze: restringi con la ricerca.</td></tr>` : ''}`;
         }).join('')}</tbody>
       </table></div>`

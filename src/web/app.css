@@ -339,3 +339,7 @@ body.readonly .btn.primary, body.readonly .btn.danger, body.readonly .bulkbar, b
 .notebox textarea { width: 100%; min-height: 70px; }
 .notemark { color: var(--warn); }
 @media (max-width: 760px) { .rrow, .rrow:has([data-f="parent"]) { grid-template-columns: 1fr; } }
+
+/* button that looks like a link: the count of inbound links, "other N" in the list of referrers */
+.linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+.refs { margin-top: 2px; }
