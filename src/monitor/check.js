@@ -146,6 +146,7 @@ async function runRequest(m, { guard, now, detail, location = null }) {
  * @returns {Promise<{at, outcome, status, ms, ttfbMs, finalUrl, errorClass, error, excerpt}>}
  */
 export async function performCheck(m, { guard = false, now = Date.now, detail = false, location = null } = {}) {
+  if (m.type === 'browser') return (await import('./browser-check.js')).browserCheck(m, { guard, now, detail }); // RF-BRW-01
   if (performNetCheck[m.type]) return performNetCheck[m.type](m, { guard, now, detail }); // DNS, TCP, SSL (RF-TYP-02..04)
   const r = await runRequest(m, { guard, now, detail, location });
   if (!m.shouldFail) return r;

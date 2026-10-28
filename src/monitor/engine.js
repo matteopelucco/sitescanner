@@ -7,7 +7,7 @@ import { FsMonitorStore } from './store-fs.js';
 import { PgMonitorStore } from './store-pg.js';
 import { performCheck, certInfo, describeError, NETWORK_CLASSES } from './check.js';
 import { normalizePolicy, normalizeKinds, policyFromLegacy } from '../core/alerting.js';
-import { isPassive, isWeb, TYPE_INFO, targetOf, normalizeSpecial, hostKey, heartbeatDeadline, heartbeatMisses, pingResult, notePing } from './types.js';
+import { isPassive, isWeb, TYPE_INFO, targetOf, normalizeSpecial, normalizeBrowser, hostKey, heartbeatDeadline, heartbeatMisses, pingResult, notePing } from './types.js';
 import { rdapLookup } from './net-checks.js';
 import { secretsKeys, decrypt, substitute, maskValues, refsOf, withoutRefs, NAME_RE } from './secrets.js';
 import { runnerFor } from './runner.js';
@@ -72,7 +72,7 @@ const guardFor = (area) => (area ? networkGuardEnabled(true) : false);
 // ---------------- monitors ----------------
 
 const DEFAULTS = {
-  type: 'http', expectedMin: 60, toleranceMin: null, hbToken: null, host: '', port: null, tcpSend: '', tcpExpect: '', minTls: 'TLSv1.2', checkDomain: true, domainDays: [30, 14, 7, 1], dnsName: '', recordType: 'A', resolver: 'system', dnsAssertions: [], intervalMin: 5, timeoutS: 30, method: 'GET', assertions: null, bodyType: 'none', body: '', contentType: '', headers: {}, auth: null,
+  type: 'http', waitSelector: '', waitText: '', failOnJsErrors: true, expectedMin: 60, toleranceMin: null, hbToken: null, host: '', port: null, tcpSend: '', tcpExpect: '', minTls: 'TLSv1.2', checkDomain: true, domainDays: [30, 14, 7, 1], dnsName: '', recordType: 'A', resolver: 'system', dnsAssertions: [], intervalMin: 5, timeoutS: 30, method: 'GET', assertions: null, bodyType: 'none', body: '', contentType: '', headers: {}, auth: null,
   degradedMs: 3000, failedMs: null, notifyDegraded: false, followRedirects: true, skipSsl: false, shouldFail: false, ipVersion: 'auto', description: '', muted: null,
   vars: {}, retry: null, locations: [], locStrategy: 'rotate', sslDays: [30, 14, 7, 1], alertPolicy: null, channels: null, tags: [], slaPct: 99.9, paused: false, source: null,
 };
@@ -120,7 +120,18 @@ export function normalizeMonitor(input, existing = null, { isolated = false } = 
   if (!TYPE_INFO[m.type]) throw bad(`Tipo di monitor: ${Object.keys(TYPE_INFO).join(', ')}`);
   const web = isWeb(m.type);
   const hb = m.type === 'heartbeat';
-  if (!web) {
+  if (m.type === 'browser') {
+    // RF-BRW-01: a page opened in a browser; no method, body or assertions on the response
+    m.method = 'GET';
+    m.assertions = [];
+    normalizeBrowser(m, bad, (raw) => {
+      const rawUrl = String(raw || '').trim();
+      let u;
+      try { u = new URL(withoutRefs(rawUrl)); } catch { throw bad(`URL non valido: ${raw || '(vuoto)'}`); }
+      if (!/^https?:$/.test(u.protocol)) throw bad('Solo URL http o https');
+      return refsOf(rawUrl).size ? rawUrl : u.toString();
+    });
+  } else if (!web) {
     // RF-TYP-01..04: no URL; the heartbeat is called by the job, the others look at a name, a port or a host
     m.url = '';
     m.method = 'GET';
@@ -248,7 +259,7 @@ export async function checkMonitor(orig, { guard, retryMs, now = Date.now, scope
   const sub = substitute(orig, scope);
   if (sub.missing.length) return { at: now(), unconfigured: sub.missing };
   const m = sub.monitor;
-  if (isWeb(m.type)) {
+  if (isWeb(m.type) || m.type === 'browser') {
     try { new URL(m.url); } catch { return { at: now(), outcome: 'error', status: null, ms: null, errorClass: 'configurazione', error: 'URL non valido dopo la sostituzione delle variabili' }; }
   }
   const r = await runCheck(m, { guard, retryMs, now, area, runner, locationPct });
@@ -345,6 +356,7 @@ export function runDetail(m, r, id) {
     id, monitorId: m.id, at: r.at, location: r.location ?? null, localFailure: !!r.localFailure, attemptLog: r.attemptLog || null, outcome: r.outcome, status: r.status, method: m.method, url: m.url, finalUrl: r.finalUrl,
     ms: r.ms, ttfbMs: r.ttfbMs, phases: r.phases || null, ip: r.ip || null, tls: r.tls || null, chain: r.chain || [], assertions: r.assertions || [],
     headers: r.headers || null, excerpt: r.excerpt || null, errorClass: r.errorClass || null, error: r.error || null, attempts: r.attempts || 1,
+    ...(r.browser ? { browser: r.browser } : {}), ...(r.screenshot ? { screenshot: r.screenshot } : {}), // RF-BRW-01: the screenshot of the failure stays with the run and the incident
   };
 }
 

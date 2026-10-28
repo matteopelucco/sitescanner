@@ -13,7 +13,7 @@ const ms = (t0) => Math.round(performance.now() - t0);
 const fail = (r, errorClass, error) => Object.assign(r, { outcome: 'error', errorClass, error });
 
 /** Thresholds of a run length (RF-RIS-01), as for the HTTP checks. */
-function judge(r, m) {
+export function judge(r, m) {
   if (r.outcome === 'error') return r;
   const failedMs = m.failedMs && m.failedMs < (m.timeoutS || 30) * 1000 ? m.failedMs : null;
   if (failedMs && r.ms > failedMs) return fail(r, 'soglia', `Risposta in ${r.ms} ms, oltre la soglia di guasto di ${failedMs} ms`);

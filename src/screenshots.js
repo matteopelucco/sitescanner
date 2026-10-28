@@ -28,6 +28,26 @@ export async function launchChromium(pw) {
 }
 
 /**
+ * RF-SEC-01 for the browser too: every request of the page (images, scripts, iframes) is checked.
+ * Chromium resolves names on its own, so the check is on a separate lookup of the same name.
+ */
+export async function guardRequests(context) {
+  const verdicts = new Map();
+  await context.route('**/*', async (route) => {
+    let host;
+    try {
+      const u = new URL(route.request().url());
+      if (!/^https?:$/.test(u.protocol)) return route.continue();
+      host = u.hostname;
+    } catch {
+      return route.abort('blockedbyclient');
+    }
+    if (!verdicts.has(host)) verdicts.set(host, hostBlocked(host));
+    return (await verdicts.get(host)) ? route.abort('blockedbyclient') : route.continue();
+  });
+}
+
+/**
  * Captures screenshots of the HTML pages that answered 2xx. Sets page.screenshot to a path relative to the scan dir.
  * Failures are recorded per page (page.screenshotError) and never abort the scan.
  * In blocks (spec §11.5): starts from target `from` and stops starting new pages after `deadline`;
@@ -53,23 +73,7 @@ export async function captureScreenshots(pages, env, opts, outDir, log = () => {
     extraHTTPHeaders: Object.fromEntries(Object.entries(env.headers || {}).filter(([k]) => k.toLowerCase() !== 'user-agent')),
     reducedMotion: 'reduce',
   });
-  if (guardNetwork) {
-    // RF-SEC-01 for the browser too: every request of the page (images, scripts, iframes) is checked.
-    // Chromium resolves names on its own, so the check is on a separate lookup of the same name.
-    const verdicts = new Map();
-    await context.route('**/*', async (route) => {
-      let host;
-      try {
-        const u = new URL(route.request().url());
-        if (!/^https?:$/.test(u.protocol)) return route.continue();
-        host = u.hostname;
-      } catch {
-        return route.abort('blockedbyclient');
-      }
-      if (!verdicts.has(host)) verdicts.set(host, hostBlocked(host));
-      return (await verdicts.get(host)) ? route.abort('blockedbyclient') : route.continue();
-    });
-  }
+  if (guardNetwork) await guardRequests(context);
   const hideCss = [
     '*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;transition:none!important;caret-color:transparent!important}',
     ...(opts.hide || []).map((s) => `${s}{visibility:hidden!important}`),

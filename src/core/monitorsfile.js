@@ -11,6 +11,7 @@ export const MONITOR_FIELDS = new Set([
   'id', 'type', 'name', 'url', 'method', 'assertions', 'bodyType', 'body', 'contentType', 'headers', 'intervalMin', 'timeoutS', 'degradedMs', 'failedMs', 'notifyDegraded', 'followRedirects',
   'skipSsl', 'shouldFail', 'ipVersion', 'description', 'sslDays', 'slaPct', 'tags', 'retry', 'locations', 'locStrategy', 'alertPolicy', 'vars', 'channels',
   'expectedMin', 'toleranceMin', 'host', 'port', 'tcpSend', 'tcpExpect', 'minTls', 'checkDomain', 'domainDays', 'dnsName', 'recordType', 'resolver', 'dnsAssertions',
+  'waitSelector', 'waitText', 'failOnJsErrors',
 ]);
 export const WINDOW_FIELDS = new Set(['id', 'name', 'type', 'start', 'days', 'time', 'dayOfMonth', 'every', 'unit', 'until', 'durationMin', 'monitors', 'tags']);
 

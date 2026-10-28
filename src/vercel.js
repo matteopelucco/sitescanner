@@ -49,11 +49,12 @@ export function createStepConsumer({ env = process.env } = {}) {
  * signed with the internal secret. There is one entry per region in vercel.json, because a Function has one region.
  */
 export function createCheckHandler({ env = process.env } = {}) {
-  const ready = initStorage({ env: { ...env, VERCEL: '1' } });
-  ready.catch(() => {}); // reported to each request below
+  // a start that failed (the database not reachable at that moment) is tried again by the next request
+  let ready = null;
+  const start = () => (ready ||= initStorage({ env: { ...env, VERCEL: '1' } }).catch((e) => { ready = null; throw e; }));
   return async (req, res) => {
     try {
-      await ready;
+      await start();
       const { handleInternalCheck } = await import('./monitor/api.js');
       if (await handleInternalCheck(req, res, new URL(req.url, 'http://x'))) return;
       res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });

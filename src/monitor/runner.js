@@ -47,7 +47,11 @@ export async function remoteCheck(loc, ctx, { fetcher = fetch, now = Date.now } 
   if (!secret) return down('manca il segreto interno');
   try {
     const res = await fetcher(`${base}/api/check/${encodeURIComponent(loc)}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-sitescanner-ts': ts, 'x-sitescanner-sig': sign(secret, ts, body) }, body, signal: AbortSignal.timeout(100000) });
-    if (!res.ok) return down(`HTTP ${res.status}`);
+    if (!res.ok) {
+      // the Function says why in its body ({error}); a platform error has none
+      const why = await res.json().then((j) => j && j.error, () => null);
+      return down(`HTTP ${res.status}${why ? `: ${String(why).slice(0, 200)}` : ''}`);
+    }
     const data = await res.json();
     return data.result ? { ...data.result, location: loc } : down('risposta vuota');
   } catch (e) {

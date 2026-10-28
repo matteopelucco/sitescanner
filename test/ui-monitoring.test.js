@@ -293,7 +293,7 @@ ui('types (v2.7): DNS, TCP and SSL from the form, with a test run and the list f
     // the choice of the type explains each one
     await page.click('#monAdd');
     await page.waitForSelector('dialog[open]');
-    assert.equal(await page.locator('dialog .typecard').count(), 6);
+    assert.equal(await page.locator('dialog .typecard').count(), 7);
     assert.match(await page.locator('dialog .typecard', { hasText: 'DNS' }).textContent(), /rileva domini scaduti/);
 
     // DNS, with a resolver given as an address and a check on the records
@@ -625,3 +625,38 @@ ui('monitoring as code (v2.13): a managed monitor is locked, exported as code, t
   assert.match(line, /test da CI/);
   assert.match(line, /ramo fix\/carrello · abcdef1 · 3 riusciti, 0 falliti/);
 }, { allow: [/status of 409/] });
+
+ui('browser check (RF-BRW-01): the form, the 15-minute floor, the screenshot in the run and in the incident', async (page) => {
+  // the form: the fields of the type, no interval under 15 minutes, a test run that shows the screenshot
+  await go(page, 'monitoring');
+  await page.click('#monAdd');
+  await page.waitForSelector('dialog[open]');
+  await page.check('dialog [name=type][value=browser]');
+  assert.equal(await page.locator('[name=waitSelector]').isVisible(), true);
+  assert.equal(await page.locator('[name=waitText]').isVisible(), true);
+  assert.equal(await page.locator('[name=method]').isVisible(), false, 'no request options for a browser');
+  const floor = await page.evaluate(() => [...document.querySelector('[name=intervalMin]').options].map((o) => [Number(o.value), o.disabled]));
+  assert.deepEqual(floor.filter(([, off]) => off).map(([v]) => v), [5, 10], 'the options under 15 are off');
+  assert.equal(await page.locator('[name=intervalMin]').inputValue(), '15');
+  await page.fill('[name=url]', app.site.url);
+  await page.fill('[name=waitSelector]', '#non-esiste');
+  await page.click('dialog [data-test]');
+  await page.waitForSelector('[data-testout] img', { timeout: 30000 });
+  assert.match(await page.locator('[data-testout]').innerText(), /Elemento non trovato: #non-esiste/);
+  assert.match(await page.locator('[data-testout]').innerText(), /Caricamento \(load\)/i);
+  await page.keyboard.press('Escape');
+
+  // a monitor that fails: the incident has the screenshot of the first failed run
+  const created = await api('POST', 'monitors', { type: 'browser', url: `${app.site.url}browser`, name: 'Vetrina nel browser', waitSelector: '#non-esiste', intervalMin: 15 });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  const id = created.data.id;
+  assert.equal((await api('POST', 'monitors', { type: 'browser', url: `${app.site.url}browser-5`, intervalMin: 5 })).status, 400, 'every 5 minutes is refused');
+  const checked = await api('POST', `monitors/${id}/check`, {});
+  assert.equal(checked.status, 200, JSON.stringify(checked.data));
+  const incidents = (await api('GET', `incidents?monitor=${id}`)).data;
+  assert.equal(incidents.length, 1);
+  await go(page, `incident/${incidents[0].id}`);
+  await page.waitForSelector('.shot img');
+  assert.ok(await page.locator('.shot img').evaluate((img) => img.naturalWidth > 100), 'the screenshot is a real image');
+  assert.match(await page.locator('body').innerText(), /Elemento non trovato/);
+});
