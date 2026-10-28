@@ -13,6 +13,7 @@ export const TYPE_INFO = {
   heartbeat: { label: 'Heartbeat (cron job)', hint: 'Controlla che un lavoro periodico (backup, feed, sitemap) giri: è lui a chiamare un indirizzo segreto a ogni esecuzione.', passive: true },
   dns: { label: 'DNS', hint: 'Controlla i record di un nome (A, MX, TXT…): rileva domini scaduti, record cambiati per errore e propagazioni non riuscite.' },
   tcp: { label: 'TCP (porta)', hint: 'Controlla che una porta accetti connessioni (SMTP, IMAP, un database), o che non le accetti, con un testo da inviare e la risposta attesa.' },
+  browser: { label: 'Browser check', hint: 'Apre la pagina in un browser vero: controlla che si carichi, che un elemento o un testo ci sia e che non ci siano errori JavaScript. Allega lo screenshot del guasto. Al più un controllo ogni 15 minuti.' },
   ssl: { label: 'SSL e dominio', hint: 'Controlla il certificato di un host (anche senza pagina web: catena, nomi, protocollo, scadenza) e la scadenza del dominio. Un controllo al giorno.' },
 };
 
@@ -80,6 +81,23 @@ export function normalizeSpecial(m, bad, intervals) {
   m.domainDays = [...new Set((m.domainDays || [30, 14, 7, 1]).map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 365))].sort((a, b) => b - a);
   m.intervalMin = 1440; // one run a day, whatever the interval of the others (RF-TYP-04)
   m.name ||= m.host;
+  return m;
+}
+export const BROWSER_INTERVALS = [15, 30, 60]; // a browser is costly (RF-BRW-01)
+
+/**
+ * A Browser check (RF-BRW-01): the page, what to wait for (an element, a text), whether JavaScript errors fail it.
+ * `parseUrl` is the one of the web types, which knows the {{NAME}} references (RF-SEG-02).
+ */
+export function normalizeBrowser(m, bad, parseUrl) {
+  m.url = parseUrl(m.url);
+  m.name = String(m.name || '').trim().slice(0, 80) || new URL(m.url.replace(/\{\{\w+\}\}/g, 'x')).host;
+  m.intervalMin = Number(m.intervalMin);
+  if (!BROWSER_INTERVALS.includes(m.intervalMin)) throw bad(`Il Browser check gira al più ogni 15 minuti: intervalli ammessi ${BROWSER_INTERVALS.join(', ')} minuti`);
+  m.waitSelector = String(m.waitSelector ?? '').trim();
+  m.waitText = String(m.waitText ?? '').trim();
+  if (m.waitSelector.length > 200 || m.waitText.length > 200) throw bad('Elemento e testo possono avere al massimo 200 caratteri');
+  m.failOnJsErrors = m.failOnJsErrors !== false;
   return m;
 }
 export const isPassive = (type) => !!(TYPE_INFO[type] && TYPE_INFO[type].passive);

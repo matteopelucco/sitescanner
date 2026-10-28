@@ -343,3 +343,7 @@ body.readonly .btn.primary, body.readonly .btn.danger, body.readonly .bulkbar, b
 /* button that looks like a link: the count of inbound links, "other N" in the list of referrers */
 .linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
 .refs { margin-top: 2px; }
+
+/* screenshot of a failed Browser check (RF-BRW-01) */
+.shot { margin: 8px 0 0; }
+.shot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }

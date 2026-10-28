@@ -34,7 +34,8 @@
               "heartbeat",
               "dns",
               "tcp",
-              "ssl"
+              "ssl",
+              "browser"
             ],
             "default": "http"
           },
@@ -399,6 +400,20 @@
               },
               "additionalProperties": false
             }
+          },
+          "waitSelector": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Browser check: selettore CSS dell'elemento che deve essere presente"
+          },
+          "waitText": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Browser check: testo che deve essere visibile (senza distinguere le maiuscole)"
+          },
+          "failOnJsErrors": {
+            "type": "boolean",
+            "description": "Browser check: un errore JavaScript nella console è un guasto (default true)"
           }
         }
       }

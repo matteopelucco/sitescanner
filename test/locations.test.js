@@ -82,7 +82,7 @@ test('the internal endpoint refuses what is not signed, and answers what is', as
   reset();
   const remote = await remoteCheck('cdg1', { area: '', monitor: { id: 'inesistente' } });
   assert.equal(remote.outcome, 'error', 'a monitor that does not exist there');
-  assert.match(remote.error, /La località cdg1 non ha eseguito il controllo \(HTTP 404\)/);
+  assert.match(remote.error, /La località cdg1 non ha eseguito il controllo \(HTTP 404: .*Monitor non trovato/, 'the reason of the Function is in the message');
 });
 
 test('retries: none, single, fixed, linear, only network errors, from another location (RF-LOC-01)', async () => {

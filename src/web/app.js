@@ -1387,7 +1387,11 @@ function wireMonitorForm(dlg, form, m) {
     method.value = methods.includes(current) ? current : 'GET';
     for (const el of dlg.querySelectorAll('[data-api]')) el.hidden = t !== 'api';
     for (const el of dlg.querySelectorAll('[data-types]')) el.hidden = !el.dataset.types.split(' ').includes(t);
-    form.querySelector('[name=url]').required = t === 'http' || t === 'api';
+    form.querySelector('[name=url]').required = t === 'http' || t === 'api' || t === 'browser';
+    // a browser costs: at most one check every 15 minutes (RF-BRW-01)
+    const every = form.querySelector('[name=intervalMin]');
+    for (const o of every.options) o.disabled = t === 'browser' && Number(o.value) < 15;
+    if (t === 'browser' && Number(every.value) < 15) every.value = '15';
     if (changed) {
       // the default status assertion follows the type, if the user has not changed it
       const rows = [...box.children];
@@ -1430,8 +1434,14 @@ function monitorForm(m = {}) {
   const headers = Object.entries(m.headers || {}).map(([a, b]) => `${a}: ${b}`).join('\n');
   return `
     ${m.id ? `<input type="hidden" name="type" value="${esc(m.type || 'http')}">` : `<div class="typechoice">${Object.entries(state.typeInfo || {}).map(([k, t], i) => `<label class="typecard"><input type="radio" name="type" value="${k}"${i === 0 ? ' checked' : ''}> <b>${esc(t.label)}</b><span class="muted small">${esc(t.hint)}</span></label>`).join('')}</div>`}
-    <label class="f" data-types="http api"><span>URL</span><input type="url" name="url" required value="${esc(m.url || '')}" placeholder="https://www.esempio.it/"></label>
+    <label class="f" data-types="http api browser"><span>URL</span><input type="url" name="url" required value="${esc(m.url || '')}" placeholder="https://www.esempio.it/"></label>
     <label class="f"><span>Nome</span><input type="text" name="name" maxlength="80" value="${esc(m.name || '')}" placeholder="dal dominio, se vuoto; per un heartbeat, es. Backup notturno"></label>
+    <div class="fields" data-types="browser" hidden>
+      <label class="f"><span>Elemento che deve esserci (selettore CSS, facoltativo)</span><input type="text" name="waitSelector" maxlength="200" value="${esc(m.waitSelector || '')}" placeholder="#prenota, main h1"></label>
+      <label class="f"><span>Testo che deve essere visibile (facoltativo)</span><input type="text" name="waitText" maxlength="200" value="${esc(m.waitText || '')}" placeholder="Prenota ora"><small>Senza distinguere le maiuscole.</small></label>
+      <label class="check" style="grid-column:1/-1"><input type="checkbox" name="failOnJsErrors"${m.failOnJsErrors !== false ? ' checked' : ''}> è un guasto se la pagina produce errori JavaScript nella console</label>
+      <p class="small muted wide">La pagina si apre in Chromium. Se il controllo fallisce, lo screenshot resta con l'incidente. Un controllo ogni 15 minuti al più: un browser costa molto più di una richiesta. Il «degradato» e il «guasto» si misurano sul tempo di caricamento.</p>
+    </div>
     <div class="fields" data-types="heartbeat" hidden>
       <label class="f"><span>Il job gira ogni (minuti)</span><input type="number" name="expectedMin" min="1" max="43200" value="${m.expectedMin || 60}"><small>Da 1 minuto a 30 giorni (1440 = ogni giorno).</small></label>
       <label class="f"><span>Tolleranza (minuti)</span><input type="number" name="toleranceMin" min="0" max="1440" value="${m.toleranceMin ?? ''}" placeholder="un decimo del periodo"><small>Quanto può ritardare prima che sia un guasto.</small></label>
@@ -1461,7 +1471,7 @@ function monitorForm(m = {}) {
       <p class="small muted wide">Un controllo al giorno, qualunque sia l'intervallo degli altri monitor.</p>
     </div>
     <details class="adv"><summary>Avanzate</summary><div class="fields">
-      <fieldset class="f wide retryfs" data-types="http api dns tcp ssl"><span>Nuovi tentativi prima di dichiarare un guasto</span>
+      <fieldset class="f wide retryfs" data-types="http api dns tcp ssl browser"><span>Nuovi tentativi prima di dichiarare un guasto</span>
         <div class="fields">
           <label class="f"><span>Strategia</span><select name="retryStrategy">${Object.entries(state.locInfo ? state.locInfo.retryStrategies : { single: 'Un nuovo tentativo' }).map(([k, l]) => `<option value="${k}"${((m.retry && m.retry.strategy) || 'single') === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
           <label class="f" data-retry-more><span>Tentativi in più (1–3)</span><input type="number" name="retryAttempts" min="1" max="3" value="${(m.retry && m.retry.attempts) || 2}"></label>
@@ -1472,8 +1482,8 @@ function monitorForm(m = {}) {
         <div class="row">${state.locInfo.locations.map((l) => `<label class="check"><input type="checkbox" name="loc" value="${esc(l.id)}"${(m.locations || []).includes(l.id) ? ' checked' : ''}> ${esc(l.name)}</label>`).join('')}</div>
         <div class="row" data-loc-more><label class="check"><input type="radio" name="locStrategy" value="rotate"${(m.locStrategy || 'rotate') === 'rotate' ? ' checked' : ''}> ${esc(state.locInfo.strategies.rotate)}</label><label class="check"><input type="radio" name="locStrategy" value="parallel"${m.locStrategy === 'parallel' ? ' checked' : ''}> ${esc(state.locInfo.strategies.parallel)}</label></div>
         <label class="check" data-loc-more><input type="checkbox" name="retrySame"${!m.retry || m.retry.sameLocation !== false ? ' checked' : ''}> i nuovi tentativi partono dalla stessa località</label></fieldset>` : ''}
-      <label class="f" data-types="http api dns tcp"><span>Intervallo</span><select name="intervalMin">${[5, 10, 15, 30, 60].map((v) => `<option value="${v}"${(m.intervalMin || 5) === v ? ' selected' : ''}>ogni ${v} min</option>`).join('')}</select></label>
-      <label class="f" data-types="http api dns tcp ssl"><span>Timeout (s)</span><input type="number" name="timeoutS" min="5" max="60" value="${m.timeoutS || 30}"></label>
+      <label class="f" data-types="http api dns tcp browser"><span>Intervallo</span><select name="intervalMin">${[5, 10, 15, 30, 60].map((v) => `<option value="${v}"${(m.intervalMin || 5) === v ? ' selected' : ''}>ogni ${v} min</option>`).join('')}</select></label>
+      <label class="f" data-types="http api dns tcp ssl browser"><span>Timeout (s)</span><input type="number" name="timeoutS" min="5" max="60" value="${m.timeoutS || 30}"></label>
       <label class="f" data-types="http api"><span>Metodo</span><select name="method"><option selected>${esc(m.method || 'GET')}</option></select></label>
       <label class="f" data-api hidden><span>Corpo della richiesta</span><select name="bodyType">${[['none', 'nessuno'], ['json', 'JSON'], ['text', 'testo']].map(([v, l]) => `<option value="${v}"${(m.bodyType || 'none') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="f" data-api hidden><span>Content-Type (se diverso dal solito)</span><input type="text" name="contentType" value="${esc(m.contentType || '')}" placeholder="application/json"></label>
@@ -1485,7 +1495,7 @@ function monitorForm(m = {}) {
       <label class="f"><span>Fallito dopo (ms)</span><input type="number" name="failedMs" min="1" max="60000" value="${m.failedMs || ''}" placeholder="come il timeout"><small>Oltre questa soglia il controllo è un guasto.</small></label>
       <label class="check"><input type="checkbox" name="notifyDegraded"${m.notifyDegraded ? ' checked' : ''}> avvisa quando diventa degradato</label>
       <label class="check" data-types="http api"><input type="checkbox" name="followRedirects"${m.followRedirects !== false ? ' checked' : ''}> segui i redirect</label>
-      <label class="check" data-types="http api ssl"><input type="checkbox" name="skipSsl"${m.skipSsl ? ' checked' : ''}> ignora gli errori del certificato</label>
+      <label class="check" data-types="http api ssl browser"><input type="checkbox" name="skipSsl"${m.skipSsl ? ' checked' : ''}> ignora gli errori del certificato</label>
       <label class="check" data-types="http api tcp" style="grid-column:1/-1"><input type="checkbox" name="shouldFail"${m.shouldFail ? ' checked' : ''}> la richiesta deve fallire <span class="muted small">(es. un'area riservata non deve essere pubblica)</span></label>
       <label class="f" data-types="http api"><span>Versione IP</span><select name="ipVersion">${[['auto', 'automatica'], ['4', 'solo IPv4'], ['6', 'solo IPv6']].map(([v, l]) => `<option value="${v}"${(m.ipVersion || 'auto') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="f wide"><span>Descrizione (note per chi interviene)</span><textarea name="description" rows="2" maxlength="500" placeholder="Hosting, contatti, cosa fare in caso di guasto…">${esc(m.description || '')}</textarea></label>
@@ -1494,13 +1504,13 @@ function monitorForm(m = {}) {
         <div class="fields" data-policy${m.alertPolicy ? '' : ' hidden'}>${policyFields({ ...DEFAULT_POLICY_UI, ...(m.alertPolicy || {}), reminders: { ...DEFAULT_POLICY_UI.reminders, ...((m.alertPolicy || {}).reminders || {}) } }, { kinds: true })}</div></fieldset>
       <label class="f"><span>Obiettivo SLA (%)</span><input type="number" name="slaPct" step="0.01" min="90" max="100" value="${m.slaPct || 99.9}"></label>
       <label class="f wide"><span>Tag (separati da virgola)</span><input type="text" name="tags" list="tagSuggest" value="${esc((m.tags || []).join(', '))}" placeholder="cliente:acme, ambiente:prod…" autocomplete="off"><datalist id="tagSuggest">${(state.knownTags || []).map((t) => `<option value="${esc(t)}">`).join('')}</datalist></label>
-      <label class="f wide" data-types="http api"><span>Variabili di questo monitor (una per riga, «NOME=valore»)</span><textarea name="vars" rows="2" placeholder="HOST=staging.esempio.it">${esc(Object.entries(m.vars || {}).map(([k, v]) => `${k}=${v}`).join('\n'))}</textarea><small>Usale come <span class="mono">{{HOST}}</span> nell'indirizzo, negli header, nel corpo e nelle asserzioni; valgono al posto di quelle dello spazio di lavoro con lo stesso nome (pagina Variabili).</small></label>
-      <label class="f" data-types="http api"><span>Basic auth: utente</span><input type="text" name="authUser" value="${esc(m.auth?.username || '')}" autocomplete="off"></label>
-      <label class="f" data-types="http api"><span>Basic auth: password</span><input type="password" name="authPass" value="${esc(m.auth?.password || '')}" autocomplete="new-password"></label>
-      <label class="f wide" data-types="http api"><span>Header (uno per riga, «Nome: valore»)</span><textarea name="headers" rows="2">${esc(headers)}</textarea></label>
+      <label class="f wide" data-types="http api browser"><span>Variabili di questo monitor (una per riga, «NOME=valore»)</span><textarea name="vars" rows="2" placeholder="HOST=staging.esempio.it">${esc(Object.entries(m.vars || {}).map(([k, v]) => `${k}=${v}`).join('\n'))}</textarea><small>Usale come <span class="mono">{{HOST}}</span> nell'indirizzo, negli header, nel corpo e nelle asserzioni; valgono al posto di quelle dello spazio di lavoro con lo stesso nome (pagina Variabili).</small></label>
+      <label class="f" data-types="http api browser"><span>Basic auth: utente</span><input type="text" name="authUser" value="${esc(m.auth?.username || '')}" autocomplete="off"></label>
+      <label class="f" data-types="http api browser"><span>Basic auth: password</span><input type="password" name="authPass" value="${esc(m.auth?.password || '')}" autocomplete="new-password"></label>
+      <label class="f wide" data-types="http api browser"><span>Header (uno per riga, «Nome: valore»)</span><textarea name="headers" rows="2">${esc(headers)}</textarea></label>
       ${(state.channels || []).length ? `<fieldset class="f wide"><span>Canali di notifica (nessuno selezionato = tutti)</span><div class="row">${state.channels.map((c) => `<label class="check"><input type="checkbox" name="channels" value="${esc(c.id)}"${(m.channels || []).includes(c.id) ? ' checked' : ''}> ${esc(c.name)}</label>`).join('')}</div></fieldset>` : ''}
     </div></details>
-    <div class="row" data-types="http api dns tcp ssl"><button type="button" class="btn small" data-test>Esegui una prova</button><span class="muted small">Un controllo con queste impostazioni, senza salvare nulla.</span></div>
+    <div class="row" data-types="http api dns tcp ssl browser"><button type="button" class="btn small" data-test>Esegui una prova</button><span class="muted small">Un controllo con queste impostazioni, senza salvare nulla.</span></div>
     <div data-testout class="panel small" hidden></div>`;
 }
 
@@ -1514,6 +1524,7 @@ function typeFields(fd) {
     return { dnsName: String(fd.get('dnsName') || '').trim(), recordType: fd.get('recordType'), resolver, dnsAssertions: fd.getAll('dns_comparison').map((comparison, i) => ({ comparison, target: fd.getAll('dns_target')[i] })).filter((a) => a.comparison === 'notEmpty' || a.target.trim()) };
   }
   if (t === 'tcp') return { host: String(fd.get('tcpHost') || '').trim(), port: intOrNull(fd.get('tcpPort')) ?? undefined, tcpSend: fd.get('tcpSend') || '', tcpExpect: fd.get('tcpExpect') || '' };
+  if (t === 'browser') return { waitSelector: String(fd.get('waitSelector') || '').trim(), waitText: String(fd.get('waitText') || '').trim(), failOnJsErrors: fd.get('failOnJsErrors') === 'on' };
   if (t === 'ssl') return { host: String(fd.get('sslHost') || '').trim(), port: intOrNull(fd.get('sslPort')) ?? undefined, minTls: fd.get('minTls'), checkDomain: fd.get('checkDomain') === 'on', domainDays: String(fd.get('domainDays')).split(/[,\s]+/).filter(Boolean).map(Number) };
   return {};
 }
@@ -1589,6 +1600,7 @@ async function editMonitorDialog(m = null) {
             ${r.phases ? `<div class="small muted">DNS ${r.phases.dnsMs} · connessione ${r.phases.tcpMs}${r.phases.tlsMs ? ` · TLS ${r.phases.tlsMs}` : ''} · attesa ${r.phases.waitMs} · download ${r.phases.downloadMs} ms${r.phases.redirectMs ? ` · redirect ${r.phases.redirectMs} ms` : ''}${r.tls ? ` · ${esc(r.tls.protocol)}` : ''}${r.ip ? ` · ${esc(r.ip)}` : ''}</div>` : ''}
             ${r.assertions && r.assertions.length ? `<ul class="plain small">${r.assertions.map((a) => `<li>${a.ok ? '✅' : '❌'} ${esc(a.text)}${a.ok ? '' : ` — <span class="sev-e">${esc(a.message)}</span>`}</li>`).join('')}</ul>` : ''}
             ${r.message && !(r.assertions && r.assertions.some((a) => !a.ok)) ? `<div>${esc(r.message)}</div>` : ''}${r.finalUrl && r.finalUrl !== readMonitorForm(new FormData(form)).url ? `<div class="muted">Indirizzo finale: <span class="mono">${esc(r.finalUrl)}</span></div>` : ''}
+            ${browserPanel(r)}
             ${hdr ? `<details><summary>Header della risposta</summary><pre class="excerpt">${esc(hdr)}</pre></details>` : ''}
             ${r.excerpt ? `<details><summary>Inizio della risposta</summary><pre class="excerpt">${esc(r.excerpt)}</pre></details>` : ''}`;
         } catch (x) {
@@ -1888,6 +1900,17 @@ function phasesChart(series, granularity) {
 const kv = (k, v) => (v == null || v === '' ? '' : `<div class="kv"><span>${k}</span><b>${v}</b></div>`);
 
 // RF-RIS-21: everything needed to understand a run without repeating it
+/** The Browser check of a run (RF-BRW-01): the timings of the page, the JavaScript errors, the screenshot of the failure. */
+function browserPanel(d) {
+  const b = d.browser;
+  if (!b && !d.screenshot) return '';
+  const shot = d.screenshot ? `<figure class="shot"><img alt="Screenshot della pagina al momento del guasto" src="data:${esc(d.screenshot.contentType)};base64,${d.screenshot.data}"><figcaption class="small muted">Screenshot al momento del guasto · ${fmtBytes(d.screenshot.bytes)}</figcaption></figure>` : '';
+  return `<div class="panel"><h3>Browser</h3>
+    ${b ? `<div class="kvs">${kv('Caricamento (load)', b.loadMs != null ? `${fmtNum(b.loadMs)} ms` : '')}${kv('DOM pronto', b.domMs != null ? `${fmtNum(b.domMs)} ms` : '')}${kv('LCP (contenuto principale)', b.lcpMs != null ? `${fmtNum(b.lcpMs)} ms` : '<span class="muted">non misurato</span>')}${kv('Errori JavaScript', b.jsErrorCount ? `<span class="sev-e">${fmtNum(b.jsErrorCount)}</span>` : '0')}</div>` : ''}
+    ${b && b.jsErrors && b.jsErrors.length ? `<ul class="plain small mono">${b.jsErrors.map((e) => `<li>${esc(e)}</li>`).join('')}${b.jsErrorCount > b.jsErrors.length ? `<li class="muted">… altri ${b.jsErrorCount - b.jsErrors.length}</li>` : ''}</ul>` : ''}
+    ${shot}</div>`;
+}
+
 function runDetailHtml(d) {
   const p = d.phases;
   const cert = d.tls && d.tls.cert;
@@ -1896,6 +1919,7 @@ function runDetailHtml(d) {
     <div class="panel"><div class="row">${OUTCOME_TAG(d.outcome)} <b>${d.status ? `HTTP ${d.status}` : 'nessuna risposta'}</b> <span>${d.ms ?? '—'} ms</span> <span class="muted">${esc(fmtDate(d.at))} · località ${esc(locLabel(d.location) || 'predefinita')}${d.attempts > 1 ? ` · ${d.attempts} tentativi` : ''}</span></div>
       ${d.error ? `<div class="${d.outcome === 'error' ? 'sev-e' : 'muted'}" style="margin-top:6px">${esc(d.error)}</div>` : ''}
       <div class="kvs">${kv('Richiesta', `${esc(d.method || 'GET')} <span class="mono">${esc(d.url || '')}</span>`)}${d.finalUrl && d.finalUrl !== d.url ? kv('Indirizzo finale', `<span class="mono">${esc(d.finalUrl)}</span>`) : ''}${kv('Indirizzo IP', d.ip ? `<span class="mono">${esc(d.ip)}</span>` : '')}${kv('TLS', d.tls ? `${esc(d.tls.protocol || '')}${d.tls.authorized === false ? ' <span class="tag error">certificato non valido</span>' : ''}` : '')}${cert ? kv('Certificato', `${esc(cert.issuer || '')} · scade il ${esc(new Date(cert.expiresAt).toLocaleDateString('it-IT'))}${cert.names && cert.names.length ? `<br><span class="muted small">${esc(cert.names.slice(0, 6).join(', '))}</span>` : ''}`) : ''}</div></div>
+    ${browserPanel(d)}
     ${p ? `<div class="panel"><h3>Fasi della richiesta</h3>${phaseBar(p, p.totalMs || 1)}<table class="phases"><tbody>${PHASE_META.map(([k, l, c]) => `<tr><td><i class="dot" style="background:${c}"></i>${l}</td><td class="num">${p[k] || 0} ms</td></tr>`).join('')}${p.redirectMs ? `<tr><td>Redirect precedenti</td><td class="num">${p.redirectMs} ms</td></tr>` : ''}<tr><th>Totale</th><td class="num"><b>${p.totalMs} ms</b></td></tr></tbody></table></div>` : ''}
     ${d.assertions && d.assertions.length ? `<div class="panel"><h3>Asserzioni</h3><ul class="plain">${d.assertions.map((a) => `<li>${a.ok ? '✅' : '❌'} ${esc(a.text)}${a.ok ? '' : ` — <span class="sev-e">${esc(a.message)}</span>`}</li>`).join('')}</ul></div>` : ''}
     ${d.chain && d.chain.length ? `<div class="panel"><h3>Redirect seguiti</h3><ol class="plain">${d.chain.map((c) => `<li><span class="tag">${c.status}</span> <span class="mono small">${esc(c.url)}</span></li>`).join('')}<li><span class="tag ok">${d.status || ''}</span> <span class="mono small">${esc(d.finalUrl || '')}</span></li></ol></div>` : ''}

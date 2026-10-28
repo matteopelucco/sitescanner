@@ -27,7 +27,7 @@
         "fra1"
       ],
       "maxDuration": 60,
-      "memory": 1024,
+      "memory": 2048,
       "includeFiles": "{src/**,package.json}"
     },
     "api/check/lhr1.js": {
@@ -35,7 +35,7 @@
         "lhr1"
       ],
       "maxDuration": 60,
-      "memory": 1024,
+      "memory": 2048,
       "includeFiles": "{src/**,package.json}"
     },
     "api/check/cdg1.js": {
@@ -43,7 +43,7 @@
         "cdg1"
       ],
       "maxDuration": 60,
-      "memory": 1024,
+      "memory": 2048,
       "includeFiles": "{src/**,package.json}"
     },
     "api/check/iad1.js": {
@@ -51,7 +51,7 @@
         "iad1"
       ],
       "maxDuration": 60,
-      "memory": 1024,
+      "memory": 2048,
       "includeFiles": "{src/**,package.json}"
     }
   },
